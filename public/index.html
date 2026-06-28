@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="uk" class="bg-background">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VARTA — Авторизація</title>
+    <meta name="description"
+        content="Модуль авторизації VARTA: реєстрація, вхід, підтвердження email та відновлення пароля." />
+    <link rel="stylesheet" href="/styles.css" />
+</head>
+
+<body>
+    <main class="shell">
+        <!-- Ліва інформаційна панель -->
+        <aside class="aside">
+            <div class="brand"><span class="lock">&#128274;</span> VARTA</div>
+            <p>Модуль авторизації освітньої платформи.</p>
+
+            <ol class="flow">
+                <li><span>1</span> Реєстрація користувача</li>
+                <li><span>2</span> Підтвердження email</li>
+                <li><span>3</span> Вхід у систему</li>
+            </ol>
+
+            <div class="roles-title">Ролі системи</div>
+            <div class="roles">
+                <span>Адмін</span><span>Методист</span><span>Завуч</span>
+                <span>Вчитель</span><span>Учень</span><span>Журі</span>
+                <span>Система</span><span>Гість</span>
+            </div>
+        </aside>
+
+        <!-- Права панель з формами -->
+        <section class="main">
+            <!-- Якщо користувач уже увійшов -->
+            <div id="accountView" class="hidden">
+                <h1>Вітаємо!</h1>
+                <p class="sub">Ви увійшли в систему VARTA.</p>
+                <div class="account-card">
+                    <dl>
+                        <dt>Email</dt>
+                        <dd id="acc-email"></dd>
+                        <dt>Роль</dt>
+                        <dd><span class="badge" id="acc-role"></span></dd>
+                        <dt>Статус</dt>
+                        <dd id="acc-status"></dd>
+                    </dl>
+                </div>
+                <button class="btn" id="logoutBtn" style="margin-top:18px">Вийти</button>
+            </div>
+
+            <!-- Форми авторизації -->
+            <div id="authView">
+                <div class="tabs">
+                    <button id="tab-login" class="active" type="button">Вхід</button>
+                    <button id="tab-register" type="button">Реєстрація</button>
+                </div>
+
+                <!-- Вхід -->
+                <form id="loginForm">
+                    <h1>Вхід у систему</h1>
+                    <p class="sub">Введіть свої дані для входу.</p>
+                    <div class="field">
+                        <label for="login-email">Email</label>
+                        <input id="login-email" type="email" autocomplete="email" required />
+                    </div>
+                    <div class="field">
+                        <label for="login-password">Пароль</label>
+                        <input id="login-password" type="password" autocomplete="current-password" required />
+                    </div>
+                    <div class="row-between">
+                        <button type="button" class="link" id="toForgot">Забули пароль?</button>
+                    </div>
+                    <button class="btn" type="submit">Увійти</button>
+                    <div class="msg" id="login-msg"></div>
+                </form>
+
+                <!-- Реєстрація -->
+                <form id="registerForm" class="hidden">
+                    <h1>Реєстрація</h1>
+                    <p class="sub">Створіть акаунт. Роль за замовчуванням — гість.</p>
+                    <div class="field">
+                        <label for="reg-name">Повне ім'я</label>
+                        <input id="reg-name" type="text" autocomplete="name" />
+                    </div>
+                    <div class="field">
+                        <label for="reg-email">Email</label>
+                        <input id="reg-email" type="email" autocomplete="email" required />
+                    </div>
+                    <div class="field">
+                        <label for="reg-password">Пароль</label>
+                        <input id="reg-password" type="password" autocomplete="new-password" minlength="6" required />
+                    </div>
+                    <button class="btn" type="submit">Зареєструватися</button>
+                    <div class="msg" id="register-msg"></div>
+                </form>
+
+                <!-- Відновлення пароля -->
+                <form id="forgotForm" class="hidden">
+                    <h1>Відновлення пароля</h1>
+                    <p class="sub">Вкажіть email — ми надішлемо посилання для відновлення.</p>
+                    <div class="field">
+                        <label for="forgot-email">Email</label>
+                        <input id="forgot-email" type="email" autocomplete="email" required />
+                    </div>
+                    <button class="btn" type="submit">Надіслати посилання</button>
+                    <button type="button" class="link" id="backToLogin" style="margin-top:6px">&larr; Назад до
+                        входу</button>
+                    <div class="msg" id="forgot-msg"></div>
+                </form>
+            </div>
+        </section>
+    </main>
+
+    <script src="/app.js"></script>
+</body>
+
+</html>

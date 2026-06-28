@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="uk" class="bg-background">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VARTA — Новий пароль</title>
+    <meta name="description" content="Встановлення нового пароля для акаунта VARTA." />
+    <link rel="stylesheet" href="/styles.css" />
+</head>
+
+<body>
+    <main class="shell" style="max-width:460px;grid-template-columns:1fr">
+        <section class="main">
+            <div class="brand" style="color:var(--primary);margin-bottom:18px">
+                <span class="lock" style="background:#e7eefc">&#128274;</span> VARTA
+            </div>
+            <h1>Новий пароль</h1>
+            <p class="sub">Введіть новий пароль для свого акаунта.</p>
+            <form id="resetForm">
+                <div class="field">
+                    <label for="password">Новий пароль</label>
+                    <input id="password" type="password" minlength="6" autocomplete="new-password" required />
+                </div>
+                <button class="btn" type="submit">Змінити пароль</button>
+                <div class="msg" id="msg"></div>
+            </form>
+            <a class="link" href="/" style="margin-top:12px;display:inline-block;text-decoration:none">&larr; До
+                входу</a>
+        </section>
+    </main>
+
+    <script>
+        const params = new URLSearchParams(location.search);
+        const token = params.get("token");
+        const msg = document.getElementById("msg");
+
+        document.getElementById("resetForm").addEventListener("submit", async (e) => {
+            e.preventDefault();
+            msg.className = "msg";
+            if (!token) {
+                msg.className = "msg show err";
+                msg.textContent = "Відсутній токен відновлення.";
+                return;
+            }
+            const res = await fetch("/api/reset-password", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    token,
+                    password: document.getElementById("password").value
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok) {
+                msg.className = "msg show ok";
+                msg.textContent = data.message || "Пароль змінено.";
+            } else {
+                msg.className = "msg show err";
+                msg.textContent = data.error || "Помилка.";
+            }
+        });
+    </script>
+</body>
+
+</html>
