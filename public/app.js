@@ -107,6 +107,11 @@ forms.forgot.addEventListener("submit", async (e) => {
 
 // ---- Акаунт -----------------------------------------------------------------
 function renderAccount(user) {
+  // Адміністратора одразу перенаправляємо в адмін-панель
+  if (user.role === "admin" || user.role === "system") {
+    window.location.href = "/admin.html";
+    return;
+  }
   $("authView").classList.add("hidden");
   $("accountView").classList.remove("hidden");
   $("acc-email").textContent = user.email;

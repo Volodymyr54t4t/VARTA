@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="uk" class="bg-admin">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VARTA — Адмін-панель</title>
+  <link rel="stylesheet" href="/admin.css" />
+</head>
+<body>
+  <div class="admin-shell">
+    <!-- Бічна навігація -->
+    <aside class="sidebar">
+      <div class="logo">
+        <span class="logo-mark">V</span>
+        <div>
+          <strong>VARTA</strong>
+          <small>Адмін-панель</small>
+        </div>
+      </div>
+      <nav class="nav">
+        <button class="nav-item active" data-page="dashboard">Dashboard</button>
+        <button class="nav-item" data-page="regions">Управління областями</button>
+        <button class="nav-item" data-page="cities">Управління містами</button>
+        <button class="nav-item" data-page="schools">Управління школами</button>
+        <button class="nav-item" data-page="users">Управління користувачами</button>
+        <button class="nav-item" data-page="requests">Запити на ролі</button>
+        <button class="nav-item" data-page="settings">Налаштування системи</button>
+        <button class="nav-item" data-page="logs">Логи системи</button>
+      </nav>
+      <button id="logoutBtn" class="logout">Вийти</button>
+    </aside>
+
+    <!-- Основна область -->
+    <main class="content">
+      <header class="topbar">
+        <h1 id="pageTitle">Dashboard</h1>
+        <div class="who"><span id="adminEmail">—</span><span class="role-pill">Адмін</span></div>
+      </header>
+
+      <div id="toast" class="toast"></div>
+
+      <!-- Dashboard -->
+      <section class="page" data-page="dashboard">
+        <div class="cards" id="statCards"></div>
+        <div class="panel">
+          <h2>Користувачі за ролями</h2>
+          <div id="roleBreakdown" class="role-bars"></div>
+        </div>
+      </section>
+
+      <!-- Області -->
+      <section class="page hidden" data-page="regions">
+        <div class="panel">
+          <h2>Додати область</h2>
+          <form id="regionForm" class="inline-form">
+            <input type="text" id="regionName" placeholder="Назва області" required />
+            <button class="btn">Додати</button>
+          </form>
+        </div>
+        <div class="panel">
+          <h2>Області</h2>
+          <table class="tbl"><thead><tr><th>Назва</th><th>Міст</th><th></th></tr></thead>
+            <tbody id="regionsBody"></tbody></table>
+        </div>
+      </section>
+
+      <!-- Міста -->
+      <section class="page hidden" data-page="cities">
+        <div class="panel">
+          <h2>Додати місто</h2>
+          <form id="cityForm" class="inline-form">
+            <select id="cityRegion" required></select>
+            <input type="text" id="cityName" placeholder="Назва міста" required />
+            <button class="btn">Додати</button>
+          </form>
+        </div>
+        <div class="panel">
+          <h2>Міста</h2>
+          <table class="tbl"><thead><tr><th>Місто</th><th>Область</th><th>Шкіл</th><th></th></tr></thead>
+            <tbody id="citiesBody"></tbody></table>
+        </div>
+      </section>
+
+      <!-- Школи -->
+      <section class="page hidden" data-page="schools">
+        <div class="panel">
+          <h2>Додати школу</h2>
+          <form id="schoolForm" class="inline-form">
+            <select id="schoolCity" required></select>
+            <input type="text" id="schoolName" placeholder="Назва школи" required />
+            <input type="text" id="schoolAddress" placeholder="Адреса (необов'язково)" />
+            <button class="btn">Додати</button>
+          </form>
+        </div>
+        <div class="panel">
+          <h2>Школи</h2>
+          <table class="tbl"><thead><tr><th>Школа</th><th>Місто</th><th>Область</th><th>Адреса</th><th></th></tr></thead>
+            <tbody id="schoolsBody"></tbody></table>
+        </div>
+      </section>
+
+      <!-- Користувачі -->
+      <section class="page hidden" data-page="users">
+        <div class="panel">
+          <h2>Користувачі</h2>
+          <p class="hint">Призначайте ролі гостям та керуйте статусами. Зміни одразу зберігаються в базі.</p>
+          <table class="tbl"><thead><tr><th>Email</th><th>Ім'я</th><th>Роль</th><th>Статус</th></tr></thead>
+            <tbody id="usersBody"></tbody></table>
+        </div>
+      </section>
+
+      <!-- Запити на ролі -->
+      <section class="page hidden" data-page="requests">
+        <div class="panel">
+          <h2>Запити на підтвердження ролей</h2>
+          <table class="tbl"><thead><tr><th>Користувач</th><th>Роль</th><th>Статус</th><th>Дата</th><th></th></tr></thead>
+            <tbody id="requestsBody"></tbody></table>
+        </div>
+      </section>
+
+      <!-- Налаштування -->
+      <section class="page hidden" data-page="settings">
+        <div class="panel">
+          <h2>Додати / оновити налаштування</h2>
+          <form id="settingForm" class="inline-form">
+            <input type="text" id="settingKey" placeholder="Ключ (напр. site_name)" required />
+            <input type="text" id="settingValue" placeholder="Значення" />
+            <button class="btn">Зберегти</button>
+          </form>
+        </div>
+        <div class="panel">
+          <h2>Поточні налаштування</h2>
+          <table class="tbl"><thead><tr><th>Ключ</th><th>Значення</th><th>Оновлено</th></tr></thead>
+            <tbody id="settingsBody"></tbody></table>
+        </div>
+      </section>
+
+      <!-- Логи -->
+      <section class="page hidden" data-page="logs">
+        <div class="panel">
+          <h2>Логи системи</h2>
+          <table class="tbl"><thead><tr><th>Дата</th><th>Дія</th><th>Деталі</th><th>Виконавець</th></tr></thead>
+            <tbody id="logsBody"></tbody></table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/admin.js"></script>
+</body>
+</html>
