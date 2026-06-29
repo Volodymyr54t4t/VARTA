@@ -120,11 +120,19 @@ forms.forgot.addEventListener("submit", async (e) => {
     showMsg(msg, "ok", html);
 });
 
+// Домашня сторінка для кожної ролі (куди перекидати одразу після входу)
+const ROLE_HOME = {
+    admin: "/admin.html",
+    system: "/admin.html",
+    methodist: "/methodist.html",
+};
+
 // ---- Акаунт -----------------------------------------------------------------
 function renderAccount(user) {
-    // Адміністратора одразу перенаправляємо в адмін-панель
-    if (user.role === "admin" || user.role === "system") {
-        window.location.href = "/admin.html";
+    // Якщо для ролі є власна панель — одразу перенаправляємо туди
+    const home = ROLE_HOME[user.role];
+    if (home) {
+        window.location.replace(home);
         return;
     }
     $("authView").classList.add("hidden");
