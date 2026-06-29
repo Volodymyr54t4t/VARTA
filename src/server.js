@@ -104,14 +104,44 @@ async function initDb() {
     );
   `);
 
-  // Школи (належать місту)
+  // Школи (належать місту). zavuch_id — завуч, що керує школою.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schools (
       id          SERIAL PRIMARY KEY,
       name        VARCHAR(255) NOT NULL,
       city_id     INTEGER NOT NULL REFERENCES cities(id) ON DELETE CASCADE,
       address     VARCHAR(255),
+      zavuch_id   INTEGER REFERENCES users(id) ON DELETE SET NULL,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  // Для вже створених баз — додаємо колонку завуча, якщо її ще немає
+  await pool.query(
+    `ALTER TABLE schools ADD COLUMN IF NOT EXISTS zavuch_id INTEGER REFERENCES users(id) ON DELETE SET NULL`
+  );
+
+  // ---- Таблиці завуча (див. схему "3. ЗАВУЧ") ----
+  // Вчителі школи (завуч підтверджує)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS teachers (
+      id          SERIAL PRIMARY KEY,
+      user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      school_id   INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      confirmed   BOOLEAN NOT NULL DEFAULT false,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (user_id, school_id)
+    );
+  `);
+
+  // Учні школи (завуч контролює)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS students (
+      id          SERIAL PRIMARY KEY,
+      user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      school_id   INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
+      class       VARCHAR(32),
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (user_id, school_id)
     );
   `);
 
@@ -1407,13 +1437,336 @@ app.get("/api/methodist/results", methodistOnly, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-//  ПРОФІЛЬ
+//  ПР��ФІЛЬ
 // ---------------------------------------------------------------------------
 app.put("/api/methodist/profile", methodistOnly, async (req, res) => {
   const full_name = (req.body?.full_name || "").trim() || null;
   const phone = (req.body?.phone || "").trim() || null;
   const upd = await pool.query(
     "UPDATE user_profiles SET full_name=$2, phone=$3 WHERE user_id=$1 RETURNING id",
+    [req.user.id, full_name, phone]
+  );
+  if (upd.rowCount === 0) {
+    await pool.query(
+      "INSERT INTO user_profiles (user_id, full_name, phone) VALUES ($1,$2,$3)",
+      [req.user.id, full_name, phone]
+    );
+  }
+  res.json({ message: "Профіль збережено" });
+});
+
+// ============================================================================
+//  ПАНЕЛЬ ЗАВУЧА (роль "zavuch", з доступом для admin/system)
+//  Можливості: підтвердження вчителів, контроль учнів,
+//  статистика школи, конкурси школи, профіль.
+// ============================================================================
+const zavuchOnly = [authRequired, roleRequired("zavuch", "admin", "system")];
+
+// Повертає школу, якою керує поточний завуч.
+// Для admin/system — школа з ?school_id або перша наявна.
+async function getZavuchSchool(req) {
+  const privileged = req.user.role === "admin" || req.user.role === "system";
+  if (privileged) {
+    const sid = parseInt(req.query.school_id, 10);
+    if (sid) {
+      const r = await pool.query("SELECT * FROM schools WHERE id = $1", [sid]);
+      return r.rows[0] || null;
+    }
+    const r = await pool.query("SELECT * FROM schools ORDER BY id LIMIT 1");
+    return r.rows[0] || null;
+  }
+  const r = await pool.query(
+    "SELECT * FROM schools WHERE zavuch_id = $1 ORDER BY id LIMIT 1",
+    [req.user.id]
+  );
+  return r.rows[0] || null;
+}
+
+// Знаходить користувача за email (для додавання вчителя/учня)
+async function findUserByEmail(email) {
+  const r = await pool.query("SELECT id, email FROM users WHERE email = $1", [
+    (email || "").toLowerCase(),
+  ]);
+  return r.rows[0] || null;
+}
+
+// --- Поточна школа завуча + перелік шкіл для вибору --------------------------
+app.get("/api/zavuch/me", zavuchOnly, async (req, res) => {
+  try {
+    const school = await getZavuchSchool(req);
+    // Школи, ще не закріплені за жодним завучем (для першого вибору)
+    const free = await pool.query(
+      `SELECT s.id, s.name, c.name AS city_name, r.name AS region_name
+         FROM schools s
+         JOIN cities c ON c.id = s.city_id
+         JOIN regions r ON r.id = c.region_id
+        WHERE s.zavuch_id IS NULL
+        ORDER BY r.name, c.name, s.name`
+    );
+    let schoolInfo = null;
+    if (school) {
+      const info = await pool.query(
+        `SELECT s.*, c.name AS city_name, r.name AS region_name
+           FROM schools s
+           JOIN cities c ON c.id = s.city_id
+           JOIN regions r ON r.id = c.region_id
+          WHERE s.id = $1`,
+        [school.id]
+      );
+      schoolInfo = info.rows[0];
+    }
+    res.json({ school: schoolInfo, freeSchools: free.rows, role: req.user.role });
+  } catch (err) {
+    console.log("[v0] Помилка /zavuch/me:", err.message);
+    res.status(500).json({ error: "Внутрішня помилка серверу" });
+  }
+});
+
+// --- Закріпити школу за завучем (перший вхід) --------------------------------
+app.post("/api/zavuch/school", zavuchOnly, async (req, res) => {
+  try {
+    const schoolId = parseInt(req.body?.school_id, 10);
+    if (!schoolId) return res.status(400).json({ error: "Оберіть школу" });
+    const privileged = req.user.role === "admin" || req.user.role === "system";
+
+    const s = await pool.query("SELECT * FROM schools WHERE id = $1", [schoolId]);
+    if (s.rowCount === 0) return res.status(404).json({ error: "Школу не знайдено" });
+    if (!privileged && s.rows[0].zavuch_id && s.rows[0].zavuch_id !== req.user.id) {
+      return res.status(409).json({ error: "Школа вже має завуча" });
+    }
+    await pool.query("UPDATE schools SET zavuch_id = $1 WHERE id = $2", [req.user.id, schoolId]);
+    await logAction("Завуч закріпив школу", req.user.id, s.rows[0].name);
+    res.json({ message: "Школу закріплено за вами" });
+  } catch (err) {
+    console.log("[v0] Помилка /zavuch/school:", err.message);
+    res.status(500).json({ error: "Внутрішня помилка серверу" });
+  }
+});
+
+// --- Dashboard: статистика школи ---------------------------------------------
+app.get("/api/zavuch/stats", zavuchOnly, async (req, res) => {
+  try {
+    const school = await getZavuchSchool(req);
+    if (!school) return res.json({ stats: null });
+    const [teachers, confirmed, pending, students, competitions, applications] = await Promise.all([
+      pool.query("SELECT COUNT(*)::int AS c FROM teachers WHERE school_id = $1", [school.id]),
+      pool.query("SELECT COUNT(*)::int AS c FROM teachers WHERE school_id = $1 AND confirmed = true", [school.id]),
+      pool.query("SELECT COUNT(*)::int AS c FROM teachers WHERE school_id = $1 AND confirmed = false", [school.id]),
+      pool.query("SELECT COUNT(*)::int AS c FROM students WHERE school_id = $1", [school.id]),
+      pool.query(
+        `SELECT COUNT(DISTINCT a.competition_id)::int AS c FROM applications a
+          WHERE a.student_id IN (SELECT user_id FROM students WHERE school_id = $1)`,
+        [school.id]
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS c FROM applications a
+          WHERE a.student_id IN (SELECT user_id FROM students WHERE school_id = $1)`,
+        [school.id]
+      ),
+    ]);
+    res.json({
+      stats: {
+        teachers: teachers.rows[0].c,
+        confirmedTeachers: confirmed.rows[0].c,
+        pendingTeachers: pending.rows[0].c,
+        students: students.rows[0].c,
+        competitions: competitions.rows[0].c,
+        applications: applications.rows[0].c,
+      },
+    });
+  } catch (err) {
+    console.log("[v0] Помилка статистики завуча:", err.message);
+    res.status(500).json({ error: "Внутрішня помилка серверу" });
+  }
+});
+
+// ---------------------------------------------------------------------------
+//  ВЧИТЕЛІ ШКОЛИ
+// ---------------------------------------------------------------------------
+app.get("/api/zavuch/teachers", zavuchOnly, async (req, res) => {
+  const school = await getZavuchSchool(req);
+  if (!school) return res.json({ teachers: [] });
+  const r = await pool.query(
+    `SELECT t.id, t.confirmed, t.created_at, u.email, p.full_name, p.phone
+       FROM teachers t
+       JOIN users u ON u.id = t.user_id
+       LEFT JOIN user_profiles p ON p.user_id = u.id
+      WHERE t.school_id = $1
+      ORDER BY t.confirmed ASC, p.full_name NULLS LAST, u.email`,
+    [school.id]
+  );
+  res.json({ teachers: r.rows });
+});
+
+// Додати вчителя за email (користувач має існувати)
+app.post("/api/zavuch/teachers", zavuchOnly, async (req, res) => {
+  try {
+    const school = await getZavuchSchool(req);
+    if (!school) return res.status(400).json({ error: "Спочатку оберіть школу" });
+    const user = await findUserByEmail(req.body?.email);
+    if (!user) return res.status(404).json({ error: "Користувача з таким email не знайдено" });
+    const exists = await pool.query(
+      "SELECT id FROM teachers WHERE user_id = $1 AND school_id = $2",
+      [user.id, school.id]
+    );
+    if (exists.rowCount > 0) return res.status(409).json({ error: "Вчитель уже у списку школи" });
+    await pool.query(
+      "INSERT INTO teachers (user_id, school_id, confirmed) VALUES ($1, $2, false)",
+      [user.id, school.id]
+    );
+    await logAction("Завуч додав вчителя", req.user.id, user.email);
+    res.status(201).json({ message: "Вчителя додано (очікує підтвердження)" });
+  } catch (err) {
+    console.log("[v0] Помилка додавання вчителя:", err.message);
+    res.status(500).json({ error: "Внутрішня помилка серверу" });
+  }
+});
+
+// Підтвердити / зняти підтвердження вчителя
+app.patch("/api/zavuch/teachers/:id", zavuchOnly, async (req, res) => {
+  try {
+    const school = await getZavuchSchool(req);
+    if (!school) return res.status(400).json({ error: "Школу не визначено" });
+    const id = parseInt(req.params.id, 10);
+    const confirmed = !!req.body?.confirmed;
+    const t = await pool.query(
+      "SELECT * FROM teachers WHERE id = $1 AND school_id = $2",
+      [id, school.id]
+    );
+    if (t.rowCount === 0) return res.status(404).json({ error: "Вчителя не знайдено" });
+    await pool.query("UPDATE teachers SET confirmed = $1 WHERE id = $2", [confirmed, id]);
+    // Підтверджений вчитель отримує роль "teacher"
+    if (confirmed) {
+      await pool.query(
+        "UPDATE users SET role = 'teacher' WHERE id = $1 AND role IN ('guest','teacher')",
+        [t.rows[0].user_id]
+      );
+    }
+    await logAction(
+      confirmed ? "Завуч підтвердив вчителя" : "Завуч зняв підтвердження вчителя",
+      req.user.id,
+      `teacher #${id}`
+    );
+    res.json({ message: confirmed ? "Вчителя підтверджено" : "Підтвердження знято" });
+  } catch (err) {
+    console.log("[v0] Помилка підтвердження вчителя:", err.message);
+    res.status(500).json({ error: "Внутрішня помилка серверу" });
+  }
+});
+
+app.delete("/api/zavuch/teachers/:id", zavuchOnly, async (req, res) => {
+  const school = await getZavuchSchool(req);
+  if (!school) return res.status(400).json({ error: "Школу не визначено" });
+  const id = parseInt(req.params.id, 10);
+  const r = await pool.query(
+    "DELETE FROM teachers WHERE id = $1 AND school_id = $2 RETURNING id",
+    [id, school.id]
+  );
+  if (r.rowCount === 0) return res.status(404).json({ error: "Вчителя не знайдено" });
+  res.json({ message: "Вчителя видалено зі школи" });
+});
+
+// ---------------------------------------------------------------------------
+//  УЧНІ ШКОЛИ
+// ---------------------------------------------------------------------------
+app.get("/api/zavuch/students", zavuchOnly, async (req, res) => {
+  const school = await getZavuchSchool(req);
+  if (!school) return res.json({ students: [] });
+  const r = await pool.query(
+    `SELECT st.id, st.class, st.created_at, u.email, p.full_name,
+            (SELECT COUNT(*)::int FROM applications a WHERE a.student_id = u.id) AS applications
+       FROM students st
+       JOIN users u ON u.id = st.user_id
+       LEFT JOIN user_profiles p ON p.user_id = u.id
+      WHERE st.school_id = $1
+      ORDER BY st.class NULLS LAST, p.full_name NULLS LAST, u.email`,
+    [school.id]
+  );
+  res.json({ students: r.rows });
+});
+
+app.post("/api/zavuch/students", zavuchOnly, async (req, res) => {
+  try {
+    const school = await getZavuchSchool(req);
+    if (!school) return res.status(400).json({ error: "Спочатку оберіть школу" });
+    const user = await findUserByEmail(req.body?.email);
+    if (!user) return res.status(404).json({ error: "Користувача з таким email не знайдено" });
+    const klass = (req.body?.class || "").trim() || null;
+    const exists = await pool.query(
+      "SELECT id FROM students WHERE user_id = $1 AND school_id = $2",
+      [user.id, school.id]
+    );
+    if (exists.rowCount > 0) return res.status(409).json({ error: "Учень уже у списку школи" });
+    await pool.query(
+      "INSERT INTO students (user_id, school_id, class) VALUES ($1, $2, $3)",
+      [user.id, school.id, klass]
+    );
+    await pool.query(
+      "UPDATE users SET role = 'student' WHERE id = $1 AND role = 'guest'",
+      [user.id]
+    );
+    await logAction("Завуч додав учня", req.user.id, user.email);
+    res.status(201).json({ message: "Учня додано до школи" });
+  } catch (err) {
+    console.log("[v0] Помилка додавання учня:", err.message);
+    res.status(500).json({ error: "Внутрішня помилка серверу" });
+  }
+});
+
+app.patch("/api/zavuch/students/:id", zavuchOnly, async (req, res) => {
+  const school = await getZavuchSchool(req);
+  if (!school) return res.status(400).json({ error: "Школу не визначено" });
+  const id = parseInt(req.params.id, 10);
+  const klass = (req.body?.class || "").trim() || null;
+  const r = await pool.query(
+    "UPDATE students SET class = $1 WHERE id = $2 AND school_id = $3 RETURNING id",
+    [klass, id, school.id]
+  );
+  if (r.rowCount === 0) return res.status(404).json({ error: "Учня не знайдено" });
+  res.json({ message: "Дані учня оновлено" });
+});
+
+app.delete("/api/zavuch/students/:id", zavuchOnly, async (req, res) => {
+  const school = await getZavuchSchool(req);
+  if (!school) return res.status(400).json({ error: "Школу не визначено" });
+  const id = parseInt(req.params.id, 10);
+  const r = await pool.query(
+    "DELETE FROM students WHERE id = $1 AND school_id = $2 RETURNING id",
+    [id, school.id]
+  );
+  if (r.rowCount === 0) return res.status(404).json({ error: "Учня не знайдено" });
+  res.json({ message: "Учня видалено зі школи" });
+});
+
+// ---------------------------------------------------------------------------
+//  КОНКУРСИ ШКОЛИ (у яких беруть участь учні школи)
+// ---------------------------------------------------------------------------
+app.get("/api/zavuch/competitions", zavuchOnly, async (req, res) => {
+  const school = await getZavuchSchool(req);
+  if (!school) return res.json({ competitions: [] });
+  const r = await pool.query(
+    `SELECT c.id, c.title, c.status, c.starts_at, c.ends_at,
+            COUNT(a.id)::int AS applications,
+            COUNT(*) FILTER (WHERE a.status = 'accepted')::int AS accepted,
+            COUNT(*) FILTER (WHERE a.status = 'rejected')::int AS rejected
+       FROM competitions c
+       JOIN applications a ON a.competition_id = c.id
+      WHERE a.student_id IN (SELECT user_id FROM students WHERE school_id = $1)
+      GROUP BY c.id
+      ORDER BY c.created_at DESC`,
+    [school.id]
+  );
+  res.json({ competitions: r.rows });
+});
+
+// ---------------------------------------------------------------------------
+//  ПРОФІЛЬ ЗАВУЧА
+// ---------------------------------------------------------------------------
+app.put("/api/zavuch/profile", zavuchOnly, async (req, res) => {
+  const full_name = (req.body?.full_name || "").trim() || null;
+  const phone = (req.body?.phone || "").trim() || null;
+  const upd = await pool.query(
+    "UPDATE user_profiles SET full_name = $2, phone = $3 WHERE user_id = $1 RETURNING id",
     [req.user.id, full_name, phone]
   );
   if (upd.rowCount === 0) {
