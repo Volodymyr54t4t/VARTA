@@ -133,17 +133,22 @@ async function initDb() {
     );
   `);
 
-  // Учні школи (завуч контролює)
+  // Учні школи (завуч контролює, вчитель створює/закріплює)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS students (
       id          SERIAL PRIMARY KEY,
       user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       school_id   INTEGER NOT NULL REFERENCES schools(id) ON DELETE CASCADE,
       class       VARCHAR(32),
+      teacher_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
       created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
       UNIQUE (user_id, school_id)
     );
   `);
+  // Для вже створених баз — додаємо колонку вчителя, якщо її ще немає (див. схему "4. ВЧИТЕЛЬ")
+  await pool.query(
+    `ALTER TABLE students ADD COLUMN IF NOT EXISTS teacher_id INTEGER REFERENCES users(id) ON DELETE SET NULL`
+  );
 
   // Запити на підтвердження ролей
   await pool.query(`
@@ -1635,7 +1640,7 @@ app.patch("/api/zavuch/teachers/:id", zavuchOnly, async (req, res) => {
     );
     if (t.rowCount === 0) return res.status(404).json({ error: "Вчителя не знайдено" });
     await pool.query("UPDATE teachers SET confirmed = $1 WHERE id = $2", [confirmed, id]);
-    // Підтверджений вчитель отримує роль "teacher"
+    // Підтвердж��ний вчитель отримує роль "teacher"
     if (confirmed) {
       await pool.query(
         "UPDATE users SET role = 'teacher' WHERE id = $1 AND role IN ('guest','teacher')",
@@ -1763,6 +1768,357 @@ app.get("/api/zavuch/competitions", zavuchOnly, async (req, res) => {
 //  ПРОФІЛЬ ЗАВУЧА
 // ---------------------------------------------------------------------------
 app.put("/api/zavuch/profile", zavuchOnly, async (req, res) => {
+  const full_name = (req.body?.full_name || "").trim() || null;
+  const phone = (req.body?.phone || "").trim() || null;
+  const upd = await pool.query(
+    "UPDATE user_profiles SET full_name = $2, phone = $3 WHERE user_id = $1 RETURNING id",
+    [req.user.id, full_name, phone]
+  );
+  if (upd.rowCount === 0) {
+    await pool.query(
+      "INSERT INTO user_profiles (user_id, full_name, phone) VALUES ($1,$2,$3)",
+      [req.user.id, full_name, phone]
+    );
+  }
+  res.json({ message: "Профіль збережено" });
+});
+
+// ============================================================================
+//  ПАНЕЛЬ ВЧИТЕЛЯ (роль "teacher", з доступом для admin/system)
+//  Можливості (див. схему "4. ВЧИТЕЛЬ"):
+//  Створює учнів → Допомагає подати заявку → Переглядає результати.
+//  Сторінки: Dashboard, Мої учні, Всі конкурси, Мої конкурси,
+//  Подати учня, Результати, Аналітика, Профіль.
+// ============================================================================
+const teacherOnly = [authRequired, roleRequired("teacher", "admin", "system")];
+
+// Школа, до якої прикріплено вчителя (через таблицю teachers, confirmed = true).
+// Для admin/system — перша школа або ?school_id.
+async function getTeacherSchool(req) {
+  const privileged = req.user.role === "admin" || req.user.role === "system";
+  if (privileged) {
+    const sid = parseInt(req.query.school_id, 10);
+    if (sid) {
+      const r = await pool.query("SELECT * FROM schools WHERE id = $1", [sid]);
+      return r.rows[0] || null;
+    }
+    const r = await pool.query("SELECT * FROM schools ORDER BY id LIMIT 1");
+    return r.rows[0] || null;
+  }
+  const r = await pool.query(
+    `SELECT s.* FROM schools s
+       JOIN teachers t ON t.school_id = s.id
+      WHERE t.user_id = $1 AND t.confirmed = true
+      ORDER BY s.id LIMIT 1`,
+    [req.user.id]
+  );
+  return r.rows[0] || null;
+}
+
+// --- Інформація про вчителя: школа + статус підтвердження --------------------
+app.get("/api/teacher/me", teacherOnly, async (req, res) => {
+  try {
+    const privileged = req.user.role === "admin" || req.user.role === "system";
+    const school = await getTeacherSchool(req);
+    let confirmed = privileged;
+    if (!privileged) {
+      const t = await pool.query(
+        "SELECT confirmed FROM teachers WHERE user_id = $1 ORDER BY id LIMIT 1",
+        [req.user.id]
+      );
+      confirmed = t.rows[0]?.confirmed === true;
+    }
+    let schoolInfo = null;
+    if (school) {
+      const info = await pool.query(
+        `SELECT s.id, s.name, c.name AS city_name, r.name AS region_name
+           FROM schools s
+           JOIN cities c ON c.id = s.city_id
+           JOIN regions r ON r.id = c.region_id
+          WHERE s.id = $1`,
+        [school.id]
+      );
+      schoolInfo = info.rows[0];
+    }
+    res.json({ school: schoolInfo, confirmed, role: req.user.role });
+  } catch (err) {
+    console.log("[v0] Помилка /teacher/me:", err.message);
+    res.status(500).json({ error: "Внутрішня помилка серверу" });
+  }
+});
+
+// --- Dashboard / Аналітика: статистика вчителя -------------------------------
+app.get("/api/teacher/stats", teacherOnly, async (req, res) => {
+  try {
+    const teacherId = req.user.id;
+    const school = await getTeacherSchool(req);
+    const privileged = req.user.role === "admin" || req.user.role === "system";
+    // Для admin/system показуємо по школі, інакше — по закріплених учнях вчителя
+    const studentFilter = privileged && school
+      ? { sql: "school_id = $1", val: [school.id] }
+      : { sql: "teacher_id = $1", val: [teacherId] };
+
+    const [students, apps, accepted, rejected, pending, scored, avg] = await Promise.all([
+      pool.query(`SELECT COUNT(*)::int AS c FROM students WHERE ${studentFilter.sql}`, studentFilter.val),
+      pool.query(
+        `SELECT COUNT(*)::int AS c FROM applications
+          WHERE student_id IN (SELECT user_id FROM students WHERE ${studentFilter.sql})`,
+        studentFilter.val
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS c FROM applications
+          WHERE status = 'accepted' AND student_id IN (SELECT user_id FROM students WHERE ${studentFilter.sql})`,
+        studentFilter.val
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS c FROM applications
+          WHERE status = 'rejected' AND student_id IN (SELECT user_id FROM students WHERE ${studentFilter.sql})`,
+        studentFilter.val
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS c FROM applications
+          WHERE status = 'submitted' AND student_id IN (SELECT user_id FROM students WHERE ${studentFilter.sql})`,
+        studentFilter.val
+      ),
+      pool.query(
+        `SELECT COUNT(DISTINCT r.application_id)::int AS c FROM results r
+          WHERE r.application_id IN (
+            SELECT id FROM applications
+             WHERE student_id IN (SELECT user_id FROM students WHERE ${studentFilter.sql}))`,
+        studentFilter.val
+      ),
+      pool.query(
+        `SELECT COALESCE(ROUND(AVG(r.score), 2), 0) AS avg FROM results r
+          WHERE r.application_id IN (
+            SELECT id FROM applications
+             WHERE student_id IN (SELECT user_id FROM students WHERE ${studentFilter.sql}))`,
+        studentFilter.val
+      ),
+    ]);
+    res.json({
+      stats: {
+        students: students.rows[0].c,
+        applications: apps.rows[0].c,
+        accepted: accepted.rows[0].c,
+        rejected: rejected.rows[0].c,
+        pending: pending.rows[0].c,
+        scored: scored.rows[0].c,
+        avgScore: Number(avg.rows[0].avg),
+      },
+    });
+  } catch (err) {
+    console.log("[v0] Помилка статистики вчителя:", err.message);
+    res.status(500).json({ error: "Внутрішня помилка серверу" });
+  }
+});
+
+// ---------------------------------------------------------------------------
+//  МОЇ УЧНІ — вчитель створює/закріплює учнів
+// ---------------------------------------------------------------------------
+app.get("/api/teacher/students", teacherOnly, async (req, res) => {
+  const privileged = req.user.role === "admin" || req.user.role === "system";
+  const school = await getTeacherSchool(req);
+  // Закріплені за вчителем учні; для admin/system — усі учні школи
+  const where = privileged && school ? "st.school_id = $1" : "st.teacher_id = $1";
+  const val = privileged && school ? [school.id] : [req.user.id];
+  const r = await pool.query(
+    `SELECT st.id, st.class, st.created_at, u.id AS user_id, u.email, p.full_name,
+            (SELECT COUNT(*)::int FROM applications a WHERE a.student_id = u.id) AS applications
+       FROM students st
+       JOIN users u ON u.id = st.user_id
+       LEFT JOIN user_profiles p ON p.user_id = u.id
+      WHERE ${where}
+      ORDER BY st.class NULLS LAST, p.full_name NULLS LAST, u.email`,
+    val
+  );
+  res.json({ students: r.rows });
+});
+
+// Закріпити існуючого учня (за email) за собою. Якщо учня ще немає у школі — створити.
+app.post("/api/teacher/students", teacherOnly, async (req, res) => {
+  try {
+    const school = await getTeacherSchool(req);
+    if (!school) return res.status(400).json({ error: "Вас не закріплено за школою" });
+    const email = (req.body?.email || "").toLowerCase().trim();
+    const klass = (req.body?.class || "").trim() || null;
+    if (!isValidEmail(email)) return res.status(400).json({ error: "Некоректний email" });
+
+    const u = await pool.query("SELECT id, email FROM users WHERE email = $1", [email]);
+    if (u.rowCount === 0) {
+      return res.status(404).json({ error: "Користувача з таким email не знайдено. Спершу він має зареєструватися." });
+    }
+    const userId = u.rows[0].id;
+    const existing = await pool.query(
+      "SELECT id FROM students WHERE user_id = $1 AND school_id = $2",
+      [userId, school.id]
+    );
+    if (existing.rowCount > 0) {
+      // вже у школі — лише закріплюємо за вчителем
+      await pool.query(
+        "UPDATE students SET teacher_id = $1, class = COALESCE($2, class) WHERE id = $3",
+        [req.user.id, klass, existing.rows[0].id]
+      );
+    } else {
+      await pool.query(
+        "INSERT INTO students (user_id, school_id, class, teacher_id) VALUES ($1,$2,$3,$4)",
+        [userId, school.id, klass, req.user.id]
+      );
+    }
+    await pool.query("UPDATE users SET role = 'student' WHERE id = $1 AND role = 'guest'", [userId]);
+    await logAction("Вчитель закріпив учня", req.user.id, email);
+    res.status(201).json({ message: "Учня закріплено за вами" });
+  } catch (err) {
+    console.log("[v0] Помилка створення учня вчителем:", err.message);
+    res.status(500).json({ error: "Внутрішня помилка серверу" });
+  }
+});
+
+app.patch("/api/teacher/students/:id", teacherOnly, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const klass = (req.body?.class || "").trim() || null;
+  const privileged = req.user.role === "admin" || req.user.role === "system";
+  const where = privileged ? "id = $2" : "id = $2 AND teacher_id = $1";
+  const val = privileged ? [req.user.id, id] : [req.user.id, id];
+  const r = await pool.query(
+    `UPDATE students SET class = $3 WHERE ${where} RETURNING id`,
+    [...val, klass]
+  );
+  if (r.rowCount === 0) return res.status(404).json({ error: "Учня не знайдено" });
+  res.json({ message: "Дані учня оновлено" });
+});
+
+// Відкріпити учня від себе (не видаляє зі школи)
+app.delete("/api/teacher/students/:id", teacherOnly, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const r = await pool.query(
+    "UPDATE students SET teacher_id = NULL WHERE id = $1 AND teacher_id = $2 RETURNING id",
+    [id, req.user.id]
+  );
+  if (r.rowCount === 0) return res.status(404).json({ error: "Учня не знайдено серед ваших" });
+  res.json({ message: "Учня відкріплено" });
+});
+
+// ---------------------------------------------------------------------------
+//  ВСІ КОНКУРСИ — опубліковані конкурси, доступні для подання
+// ---------------------------------------------------------------------------
+app.get("/api/teacher/competitions", teacherOnly, async (req, res) => {
+  const r = await pool.query(
+    `SELECT c.id, c.title, c.description, c.status, c.starts_at, c.ends_at,
+            (SELECT COUNT(*)::int FROM competition_sections s WHERE s.competition_id = c.id) AS sections
+       FROM competitions c
+      WHERE c.status = 'published'
+      ORDER BY c.starts_at NULLS LAST, c.created_at DESC`
+  );
+  res.json({ competitions: r.rows });
+});
+
+// Секції конкретного конкурсу (для форми подання)
+app.get("/api/teacher/competitions/:id/sections", teacherOnly, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const r = await pool.query(
+    "SELECT id, name, description FROM competition_sections WHERE competition_id = $1 ORDER BY name",
+    [id]
+  );
+  res.json({ sections: r.rows });
+});
+
+// ---------------------------------------------------------------------------
+//  МОЇ КОНКУРСИ — конкурси, у яких беруть участь учні вчителя
+// ---------------------------------------------------------------------------
+app.get("/api/teacher/my-competitions", teacherOnly, async (req, res) => {
+  const r = await pool.query(
+    `SELECT c.id, c.title, c.status, c.starts_at, c.ends_at,
+            COUNT(a.id)::int AS applications,
+            COUNT(*) FILTER (WHERE a.status = 'accepted')::int AS accepted,
+            COUNT(*) FILTER (WHERE a.status = 'rejected')::int AS rejected,
+            COUNT(*) FILTER (WHERE a.status = 'submitted')::int AS pending
+       FROM competitions c
+       JOIN applications a ON a.competition_id = c.id
+      WHERE a.student_id IN (SELECT user_id FROM students WHERE teacher_id = $1)
+      GROUP BY c.id
+      ORDER BY c.created_at DESC`,
+    [req.user.id]
+  );
+  res.json({ competitions: r.rows });
+});
+
+// ---------------------------------------------------------------------------
+//  ПОДАТИ УЧНЯ — вчитель допомагає подати заявку від імені учня
+// ---------------------------------------------------------------------------
+app.post("/api/teacher/applications", teacherOnly, async (req, res) => {
+  try {
+    const competitionId = parseInt(req.body?.competition_id, 10);
+    const studentId = parseInt(req.body?.student_id, 10); // user_id учня
+    const sectionId = req.body?.section_id ? parseInt(req.body.section_id, 10) : null;
+    const title = (req.body?.title || "").trim() || null;
+    if (!competitionId || !studentId) {
+      return res.status(400).json({ error: "Оберіть конкурс і учня" });
+    }
+    // Перевіряємо, що учень закріплений за вчителем (для admin/system — пропускаємо)
+    const privileged = req.user.role === "admin" || req.user.role === "system";
+    if (!privileged) {
+      const own = await pool.query(
+        "SELECT id FROM students WHERE user_id = $1 AND teacher_id = $2",
+        [studentId, req.user.id]
+      );
+      if (own.rowCount === 0) {
+        return res.status(403).json({ error: "Цей учень не закріплений за вами" });
+      }
+    }
+    const comp = await pool.query(
+      "SELECT id, status FROM competitions WHERE id = $1",
+      [competitionId]
+    );
+    if (comp.rowCount === 0) return res.status(404).json({ error: "Конкурс не знайдено" });
+    if (comp.rows[0].status !== "published") {
+      return res.status(400).json({ error: "Подання можливе лише до опублікованих конкурсів" });
+    }
+    const ins = await pool.query(
+      `INSERT INTO applications (competition_id, student_id, section_id, title, status)
+       VALUES ($1,$2,$3,$4,'submitted') RETURNING id`,
+      [competitionId, studentId, sectionId, title]
+    );
+    await logAction("Вчитель подав заявку учня", req.user.id, `application #${ins.rows[0].id}`);
+    res.status(201).json({ message: "Заявку подано", id: ins.rows[0].id });
+  } catch (err) {
+    console.log("[v0] Помилка подання заявки вчителем:", err.message);
+    res.status(500).json({ error: "Внутрішня помилка серверу" });
+  }
+});
+
+// ---------------------------------------------------------------------------
+//  РЕЗУЛЬТАТИ — вчитель переглядає оцінки заявок своїх учнів
+// ---------------------------------------------------------------------------
+app.get("/api/teacher/results", teacherOnly, async (req, res) => {
+  const privileged = req.user.role === "admin" || req.user.role === "system";
+  const where = privileged ? "1=1" : "st.teacher_id = $1";
+  const val = privileged ? [] : [req.user.id];
+  const r = await pool.query(
+    `SELECT a.id AS application_id, a.title, a.status, a.created_at,
+            c.title AS competition_title,
+            sec.name AS section_name,
+            p.full_name AS student_name, u.email AS student_email,
+            r.score, r.comment,
+            jp.full_name AS judge_name
+       FROM applications a
+       JOIN students st ON st.user_id = a.student_id
+       JOIN users u ON u.id = a.student_id
+       LEFT JOIN user_profiles p ON p.user_id = u.id
+       JOIN competitions c ON c.id = a.competition_id
+       LEFT JOIN competition_sections sec ON sec.id = a.section_id
+       LEFT JOIN results r ON r.application_id = a.id
+       LEFT JOIN user_profiles jp ON jp.user_id = r.judge_id
+      WHERE ${where}
+      ORDER BY a.created_at DESC`,
+    val
+  );
+  res.json({ results: r.rows });
+});
+
+// ---------------------------------------------------------------------------
+//  ПРОФІЛЬ ВЧИТЕЛЯ
+// ---------------------------------------------------------------------------
+app.put("/api/teacher/profile", teacherOnly, async (req, res) => {
   const full_name = (req.body?.full_name || "").trim() || null;
   const phone = (req.body?.phone || "").trim() || null;
   const upd = await pool.query(

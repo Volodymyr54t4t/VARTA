@@ -126,6 +126,7 @@ const ROLE_HOME = {
     system: "/admin.html",
     methodist: "/methodist.html",
     zavuch: "/zavuch.html",
+    teacher: "/teacher.html",
 };
 
 // ---- Акаунт -----------------------------------------------------------------
