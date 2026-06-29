@@ -127,6 +127,11 @@ function renderAccount(user) {
         window.location.href = "/admin.html";
         return;
     }
+    // Методиста перенаправляємо у його панель
+    if (user.role === "methodist") {
+        window.location.href = "/methodist.html";
+        return;
+    }
     $("authView").classList.add("hidden");
     $("accountView").classList.remove("hidden");
     $("acc-email").textContent = user.email;

@@ -144,6 +144,113 @@ async function initDb() {
     );
   `);
 
+  // ---- Таблиці методиста (див. схему "2. МЕТОДИСТ") ----
+  // Конкурси
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS competitions (
+      id           SERIAL PRIMARY KEY,
+      title        VARCHAR(255) NOT NULL,
+      description  TEXT,
+      status       VARCHAR(32)  NOT NULL DEFAULT 'draft', -- draft | published | archived
+      methodist_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      starts_at    DATE,
+      ends_at      DATE,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // Секції конкурсу
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS competition_sections (
+      id             SERIAL PRIMARY KEY,
+      competition_id INTEGER NOT NULL REFERENCES competitions(id) ON DELETE CASCADE,
+      name           VARCHAR(255) NOT NULL,
+      description    TEXT,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // Форма подання заявки (поля у форматі JSON)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS competition_forms (
+      id             SERIAL PRIMARY KEY,
+      competition_id INTEGER UNIQUE NOT NULL REFERENCES competitions(id) ON DELETE CASCADE,
+      fields_json    JSONB NOT NULL DEFAULT '[]',
+      updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // Положення конкурсу
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS competition_rules (
+      id             SERIAL PRIMARY KEY,
+      competition_id INTEGER UNIQUE NOT NULL REFERENCES competitions(id) ON DELETE CASCADE,
+      content        TEXT,
+      file_url       VARCHAR(512),
+      updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // Призначене журі
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS competition_judges (
+      id             SERIAL PRIMARY KEY,
+      competition_id INTEGER NOT NULL REFERENCES competitions(id) ON DELETE CASCADE,
+      user_id        INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role           VARCHAR(64) NOT NULL DEFAULT 'judge', -- head | judge
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+      UNIQUE (competition_id, user_id)
+    );
+  `);
+
+  // Шаблони конкурсів
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS competition_templates (
+      id           SERIAL PRIMARY KEY,
+      name         VARCHAR(255) NOT NULL,
+      data_json    JSONB NOT NULL DEFAULT '{}',
+      methodist_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // Заявки учнів
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS applications (
+      id             SERIAL PRIMARY KEY,
+      competition_id INTEGER NOT NULL REFERENCES competitions(id) ON DELETE CASCADE,
+      student_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      section_id     INTEGER REFERENCES competition_sections(id) ON DELETE SET NULL,
+      title          VARCHAR(255),
+      data_json      JSONB NOT NULL DEFAULT '{}',
+      status         VARCHAR(32) NOT NULL DEFAULT 'submitted', -- submitted | accepted | rejected
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // Файли заявок
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS application_files (
+      id             SERIAL PRIMARY KEY,
+      application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+      file_url       VARCHAR(512) NOT NULL,
+      file_type      VARCHAR(64),
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  // Результати оцінювання
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS results (
+      id             SERIAL PRIMARY KEY,
+      application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+      judge_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      score          NUMERIC(5,2),
+      comment        TEXT,
+      created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
   // ---- Універсальний адміністратор ----
   const adminEmail = (process.env.ADMIN_EMAIL || "admin@varta.com").toLowerCase();
   const adminPassword = process.env.ADMIN_PASSWORD || "C240809v";
@@ -168,7 +275,7 @@ async function initDb() {
     );
   }
 
-  console.log("[v0] База даних готова: users, user_profiles, auth_tokens, regions, cities, schools, user_roles_requests, system_logs, system_settings");
+  console.log("[v0] База даних готова: users, user_profiles, auth_tokens, regions, cities, schools, user_roles_requests, system_logs, system_settings, competitions, competition_sections, competition_forms, competition_rules, competition_judges, competition_templates, applications, application_files, results");
 }
 
 // Запис дії в журнал системи
@@ -730,6 +837,503 @@ app.get("/api/admin/logs", adminOnly, async (req, res) => {
       LIMIT 200`
   );
   res.json({ logs: r.rows });
+});
+
+// ============================================================================
+//  ПАНЕЛЬ МЕТОДИСТА (роль "methodist", з доступом для admin/system)
+//  Можливості: створення конкурсів, секцій, форм, положень,
+//  призначення журі, публікація, шаблони, заявки, результати, аналітика.
+// ============================================================================
+const methodistOnly = [authRequired, roleRequired("methodist", "admin", "system")];
+
+// Перевіряє, що конкурс належить поточному методисту (admin/system — без обмежень).
+async function ownedCompetition(req, res) {
+  const id = parseInt(req.params.id, 10);
+  const r = await pool.query("SELECT * FROM competitions WHERE id = $1", [id]);
+  if (r.rowCount === 0) {
+    res.status(404).json({ error: "Конкурс не знайдено" });
+    return null;
+  }
+  const competition = r.rows[0];
+  const privileged = req.user.role === "admin" || req.user.role === "system";
+  if (!privileged && competition.methodist_id !== req.user.id) {
+    res.status(403).json({ error: "Це не ваш конкурс" });
+    return null;
+  }
+  return competition;
+}
+
+// --- Dashboard: зведена статистика методиста ---------------------------------
+app.get("/api/methodist/stats", methodistOnly, async (req, res) => {
+  try {
+    const mine = req.user.role === "methodist" ? "WHERE methodist_id = $1" : "";
+    const params = req.user.role === "methodist" ? [req.user.id] : [];
+    const [total, published, drafts, archived] = await Promise.all([
+      pool.query(`SELECT COUNT(*)::int AS c FROM competitions ${mine}`, params),
+      pool.query(`SELECT COUNT(*)::int AS c FROM competitions ${mine ? mine + " AND" : "WHERE"} status = 'published'`, params),
+      pool.query(`SELECT COUNT(*)::int AS c FROM competitions ${mine ? mine + " AND" : "WHERE"} status = 'draft'`, params),
+      pool.query(`SELECT COUNT(*)::int AS c FROM competitions ${mine ? mine + " AND" : "WHERE"} status = 'archived'`, params),
+    ]);
+    const apps = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM applications a
+         JOIN competitions c ON c.id = a.competition_id
+        ${req.user.role === "methodist" ? "WHERE c.methodist_id = $1" : ""}`,
+      params
+    );
+    const judges = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM competition_judges cj
+         JOIN competitions c ON c.id = cj.competition_id
+        ${req.user.role === "methodist" ? "WHERE c.methodist_id = $1" : ""}`,
+      params
+    );
+    res.json({
+      stats: {
+        total: total.rows[0].c,
+        published: published.rows[0].c,
+        drafts: drafts.rows[0].c,
+        archived: archived.rows[0].c,
+        applications: apps.rows[0].c,
+        judges: judges.rows[0].c,
+      },
+    });
+  } catch (err) {
+    console.log("[v0] Помилка статистики методиста:", err.message);
+    res.status(500).json({ error: "Внутрішня помилка серверу" });
+  }
+});
+
+// --- Аналітика ---------------------------------------------------------------
+app.get("/api/methodist/analytics", methodistOnly, async (req, res) => {
+  try {
+    const mineJoin = req.user.role === "methodist" ? "AND c.methodist_id = $1" : "";
+    const params = req.user.role === "methodist" ? [req.user.id] : [];
+    const byStatus = await pool.query(
+      `SELECT status, COUNT(*)::int AS c FROM competitions
+        ${req.user.role === "methodist" ? "WHERE methodist_id = $1" : ""}
+        GROUP BY status ORDER BY status`,
+      params
+    );
+    const appsByComp = await pool.query(
+      `SELECT c.title, COUNT(a.id)::int AS applications
+         FROM competitions c
+         LEFT JOIN applications a ON a.competition_id = c.id
+        WHERE 1=1 ${mineJoin}
+        GROUP BY c.id, c.title
+        ORDER BY applications DESC
+        LIMIT 10`,
+      params
+    );
+    const appsByStatus = await pool.query(
+      `SELECT a.status, COUNT(*)::int AS c
+         FROM applications a JOIN competitions c ON c.id = a.competition_id
+        WHERE 1=1 ${mineJoin}
+        GROUP BY a.status ORDER BY a.status`,
+      params
+    );
+    res.json({ byStatus: byStatus.rows, appsByComp: appsByComp.rows, appsByStatus: appsByStatus.rows });
+  } catch (err) {
+    console.log("[v0] Помилка аналітики:", err.message);
+    res.status(500).json({ error: "Внутрішня помилка серверу" });
+  }
+});
+
+// ---------------------------------------------------------------------------
+//  КОНКУРСИ
+// ---------------------------------------------------------------------------
+app.get("/api/methodist/competitions", methodistOnly, async (req, res) => {
+  try {
+    const archived = req.query.archived === "1";
+    const conds = [];
+    const params = [];
+    if (req.user.role === "methodist") {
+      params.push(req.user.id);
+      conds.push(`c.methodist_id = $${params.length}`);
+    }
+    conds.push(archived ? "c.status = 'archived'" : "c.status <> 'archived'");
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    const r = await pool.query(
+      `SELECT c.*, p.full_name AS methodist_name,
+              (SELECT COUNT(*)::int FROM competition_sections s WHERE s.competition_id = c.id) AS sections_count,
+              (SELECT COUNT(*)::int FROM competition_judges j WHERE j.competition_id = c.id) AS judges_count,
+              (SELECT COUNT(*)::int FROM applications a WHERE a.competition_id = c.id) AS applications_count
+         FROM competitions c
+         LEFT JOIN user_profiles p ON p.user_id = c.methodist_id
+         ${where}
+        ORDER BY c.created_at DESC`,
+      params
+    );
+    res.json({ competitions: r.rows });
+  } catch (err) {
+    console.log("[v0] Помилка списку конкурсів:", err.message);
+    res.status(500).json({ error: "Внутрішня помилка серверу" });
+  }
+});
+
+app.post("/api/methodist/competitions", methodistOnly, async (req, res) => {
+  try {
+    const title = (req.body?.title || "").trim();
+    const description = (req.body?.description || "").trim() || null;
+    const starts_at = req.body?.starts_at || null;
+    const ends_at = req.body?.ends_at || null;
+    if (!title) return res.status(400).json({ error: "Вкажіть назву конкурсу" });
+    const r = await pool.query(
+      `INSERT INTO competitions (title, description, methodist_id, starts_at, ends_at)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [title, description, req.user.id, starts_at, ends_at]
+    );
+    // Створюємо порожню форму, щоб одразу можна було її редагувати
+    await pool.query(
+      `INSERT INTO competition_forms (competition_id, fields_json) VALUES ($1, '[]')
+       ON CONFLICT (competition_id) DO NOTHING`,
+      [r.rows[0].id]
+    );
+    await logAction("Створено конкурс", req.user.id, title);
+    res.status(201).json({ competition: r.rows[0] });
+  } catch (err) {
+    console.log("[v0] Помилка створення конкурсу:", err.message);
+    res.status(500).json({ error: "Внутрішня помилка серверу" });
+  }
+});
+
+// Повна інформація про конкурс (секції, форма, положення, журі)
+app.get("/api/methodist/competitions/:id", methodistOnly, async (req, res) => {
+  const competition = await ownedCompetition(req, res);
+  if (!competition) return;
+  const [sections, form, rules, judges] = await Promise.all([
+    pool.query("SELECT * FROM competition_sections WHERE competition_id = $1 ORDER BY id", [competition.id]),
+    pool.query("SELECT * FROM competition_forms WHERE competition_id = $1", [competition.id]),
+    pool.query("SELECT * FROM competition_rules WHERE competition_id = $1", [competition.id]),
+    pool.query(
+      `SELECT cj.*, u.email, pr.full_name
+         FROM competition_judges cj
+         JOIN users u ON u.id = cj.user_id
+         LEFT JOIN user_profiles pr ON pr.user_id = u.id
+        WHERE cj.competition_id = $1 ORDER BY cj.id`,
+      [competition.id]
+    ),
+  ]);
+  res.json({
+    competition,
+    sections: sections.rows,
+    form: form.rows[0] || { fields_json: [] },
+    rules: rules.rows[0] || { content: "", file_url: "" },
+    judges: judges.rows,
+  });
+});
+
+app.patch("/api/methodist/competitions/:id", methodistOnly, async (req, res) => {
+  const competition = await ownedCompetition(req, res);
+  if (!competition) return;
+  const title = (req.body?.title ?? competition.title).trim();
+  const description = req.body?.description ?? competition.description;
+  const starts_at = req.body?.starts_at ?? competition.starts_at;
+  const ends_at = req.body?.ends_at ?? competition.ends_at;
+  if (!title) return res.status(400).json({ error: "Назва не може бути порожньою" });
+  const r = await pool.query(
+    `UPDATE competitions SET title=$1, description=$2, starts_at=$3, ends_at=$4 WHERE id=$5 RETURNING *`,
+    [title, description, starts_at, ends_at, competition.id]
+  );
+  res.json({ competition: r.rows[0] });
+});
+
+// Публікація конкурсу (потрібні секції, форма та хоча б один суддя)
+app.post("/api/methodist/competitions/:id/publish", methodistOnly, async (req, res) => {
+  const competition = await ownedCompetition(req, res);
+  if (!competition) return;
+  const sections = await pool.query("SELECT COUNT(*)::int AS c FROM competition_sections WHERE competition_id=$1", [competition.id]);
+  const judges = await pool.query("SELECT COUNT(*)::int AS c FROM competition_judges WHERE competition_id=$1", [competition.id]);
+  if (sections.rows[0].c === 0) return res.status(400).json({ error: "Додайте принаймні одну секцію перед публікацією" });
+  if (judges.rows[0].c === 0) return res.status(400).json({ error: "Призначте принаймні одного суддю перед публікацією" });
+  const r = await pool.query("UPDATE competitions SET status='published' WHERE id=$1 RETURNING *", [competition.id]);
+  await logAction("Опубліковано конкурс", req.user.id, competition.title);
+  res.json({ competition: r.rows[0] });
+});
+
+app.post("/api/methodist/competitions/:id/archive", methodistOnly, async (req, res) => {
+  const competition = await ownedCompetition(req, res);
+  if (!competition) return;
+  const r = await pool.query("UPDATE competitions SET status='archived' WHERE id=$1 RETURNING *", [competition.id]);
+  await logAction("Архівовано конкурс", req.user.id, competition.title);
+  res.json({ competition: r.rows[0] });
+});
+
+app.post("/api/methodist/competitions/:id/restore", methodistOnly, async (req, res) => {
+  const competition = await ownedCompetition(req, res);
+  if (!competition) return;
+  const r = await pool.query("UPDATE competitions SET status='draft' WHERE id=$1 RETURNING *", [competition.id]);
+  await logAction("Відновлено конкурс з архіву", req.user.id, competition.title);
+  res.json({ competition: r.rows[0] });
+});
+
+app.delete("/api/methodist/competitions/:id", methodistOnly, async (req, res) => {
+  const competition = await ownedCompetition(req, res);
+  if (!competition) return;
+  await pool.query("DELETE FROM competitions WHERE id=$1", [competition.id]);
+  await logAction("Видалено конкурс", req.user.id, competition.title);
+  res.json({ message: "Конкурс видалено" });
+});
+
+// ---------------------------------------------------------------------------
+//  СЕКЦІЇ
+// ---------------------------------------------------------------------------
+app.post("/api/methodist/competitions/:id/sections", methodistOnly, async (req, res) => {
+  const competition = await ownedCompetition(req, res);
+  if (!competition) return;
+  const name = (req.body?.name || "").trim();
+  const description = (req.body?.description || "").trim() || null;
+  if (!name) return res.status(400).json({ error: "Вкажіть назву секції" });
+  const r = await pool.query(
+    "INSERT INTO competition_sections (competition_id, name, description) VALUES ($1,$2,$3) RETURNING *",
+    [competition.id, name, description]
+  );
+  res.status(201).json({ section: r.rows[0] });
+});
+
+app.delete("/api/methodist/sections/:id", methodistOnly, async (req, res) => {
+  const sid = parseInt(req.params.id, 10);
+  const s = await pool.query(
+    `SELECT s.*, c.methodist_id FROM competition_sections s
+       JOIN competitions c ON c.id = s.competition_id WHERE s.id = $1`,
+    [sid]
+  );
+  if (s.rowCount === 0) return res.status(404).json({ error: "Секцію не знайдено" });
+  const privileged = req.user.role === "admin" || req.user.role === "system";
+  if (!privileged && s.rows[0].methodist_id !== req.user.id) return res.status(403).json({ error: "Недостатньо прав" });
+  await pool.query("DELETE FROM competition_sections WHERE id=$1", [sid]);
+  res.json({ message: "Секцію видалено" });
+});
+
+// ---------------------------------------------------------------------------
+//  ФОРМА ПОДАННЯ
+// ---------------------------------------------------------------------------
+app.put("/api/methodist/competitions/:id/form", methodistOnly, async (req, res) => {
+  const competition = await ownedCompetition(req, res);
+  if (!competition) return;
+  const fields = Array.isArray(req.body?.fields_json) ? req.body.fields_json : [];
+  const r = await pool.query(
+    `INSERT INTO competition_forms (competition_id, fields_json, updated_at)
+     VALUES ($1, $2, now())
+     ON CONFLICT (competition_id) DO UPDATE SET fields_json = EXCLUDED.fields_json, updated_at = now()
+     RETURNING *`,
+    [competition.id, JSON.stringify(fields)]
+  );
+  res.json({ form: r.rows[0] });
+});
+
+// ---------------------------------------------------------------------------
+//  ПОЛОЖЕННЯ
+// ---------------------------------------------------------------------------
+app.put("/api/methodist/competitions/:id/rules", methodistOnly, async (req, res) => {
+  const competition = await ownedCompetition(req, res);
+  if (!competition) return;
+  const content = req.body?.content ?? "";
+  const file_url = (req.body?.file_url || "").trim() || null;
+  const r = await pool.query(
+    `INSERT INTO competition_rules (competition_id, content, file_url, updated_at)
+     VALUES ($1, $2, $3, now())
+     ON CONFLICT (competition_id) DO UPDATE SET content = EXCLUDED.content, file_url = EXCLUDED.file_url, updated_at = now()
+     RETURNING *`,
+    [competition.id, content, file_url]
+  );
+  res.json({ rules: r.rows[0] });
+});
+
+// ---------------------------------------------------------------------------
+//  ЖУРІ
+// ---------------------------------------------------------------------------
+// Список користувачів, які можуть бути суддями (роль jury)
+app.get("/api/methodist/judges", methodistOnly, async (req, res) => {
+  const r = await pool.query(
+    `SELECT u.id, u.email, p.full_name
+       FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id
+      WHERE u.role = 'jury' AND u.status = 'active'
+      ORDER BY p.full_name NULLS LAST, u.email`
+  );
+  res.json({ judges: r.rows });
+});
+
+app.post("/api/methodist/competitions/:id/judges", methodistOnly, async (req, res) => {
+  const competition = await ownedCompetition(req, res);
+  if (!competition) return;
+  const user_id = parseInt(req.body?.user_id, 10);
+  const role = (req.body?.role || "judge").trim();
+  if (!user_id) return res.status(400).json({ error: "Оберіть суддю" });
+  try {
+    const r = await pool.query(
+      "INSERT INTO competition_judges (competition_id, user_id, role) VALUES ($1,$2,$3) RETURNING *",
+      [competition.id, user_id, role]
+    );
+    await logAction("Призначено суддю", req.user.id, `competition #${competition.id}, user #${user_id}`);
+    res.status(201).json({ judge: r.rows[0] });
+  } catch (err) {
+    if (err.code === "23505") return res.status(409).json({ error: "Цього суддю вже призначено" });
+    if (err.code === "23503") return res.status(400).json({ error: "Користувача не існує" });
+    res.status(500).json({ error: "Внутрішня помилка серверу" });
+  }
+});
+
+app.delete("/api/methodist/judges/:id", methodistOnly, async (req, res) => {
+  const jid = parseInt(req.params.id, 10);
+  const j = await pool.query(
+    `SELECT cj.*, c.methodist_id FROM competition_judges cj
+       JOIN competitions c ON c.id = cj.competition_id WHERE cj.id = $1`,
+    [jid]
+  );
+  if (j.rowCount === 0) return res.status(404).json({ error: "Запис не знайдено" });
+  const privileged = req.user.role === "admin" || req.user.role === "system";
+  if (!privileged && j.rows[0].methodist_id !== req.user.id) return res.status(403).json({ error: "Недостатньо прав" });
+  await pool.query("DELETE FROM competition_judges WHERE id=$1", [jid]);
+  res.json({ message: "Суддю знято" });
+});
+
+// ---------------------------------------------------------------------------
+//  ШАБЛОНИ КОНКУРСІВ
+// ---------------------------------------------------------------------------
+app.get("/api/methodist/templates", methodistOnly, async (req, res) => {
+  const params = req.user.role === "methodist" ? [req.user.id] : [];
+  const r = await pool.query(
+    `SELECT t.*, p.full_name AS author
+       FROM competition_templates t
+       LEFT JOIN user_profiles p ON p.user_id = t.methodist_id
+      ${req.user.role === "methodist" ? "WHERE t.methodist_id = $1" : ""}
+      ORDER BY t.created_at DESC`,
+    params
+  );
+  res.json({ templates: r.rows });
+});
+
+app.post("/api/methodist/templates", methodistOnly, async (req, res) => {
+  const name = (req.body?.name || "").trim();
+  let data = req.body?.data_json ?? {};
+  if (!name) return res.status(400).json({ error: "Вкажіть назву шаблону" });
+  if (typeof data === "string") {
+    try { data = JSON.parse(data); } catch { return res.status(400).json({ error: "Невірний формат JSON" }); }
+  }
+  const r = await pool.query(
+    "INSERT INTO competition_templates (name, data_json, methodist_id) VALUES ($1,$2,$3) RETURNING *",
+    [name, JSON.stringify(data), req.user.id]
+  );
+  res.status(201).json({ template: r.rows[0] });
+});
+
+// Створити конкурс на основі шаблону
+app.post("/api/methodist/templates/:id/use", methodistOnly, async (req, res) => {
+  const tid = parseInt(req.params.id, 10);
+  const t = await pool.query("SELECT * FROM competition_templates WHERE id=$1", [tid]);
+  if (t.rowCount === 0) return res.status(404).json({ error: "Шаблон не знайдено" });
+  const data = t.rows[0].data_json || {};
+  const title = (data.title || t.rows[0].name).trim();
+  const comp = await pool.query(
+    `INSERT INTO competitions (title, description, methodist_id, starts_at, ends_at)
+     VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+    [title, data.description || null, req.user.id, data.starts_at || null, data.ends_at || null]
+  );
+  const competitionId = comp.rows[0].id;
+  // Секції з шаблону
+  if (Array.isArray(data.sections)) {
+    for (const sec of data.sections) {
+      const name = typeof sec === "string" ? sec : sec?.name;
+      if (name) await pool.query("INSERT INTO competition_sections (competition_id, name) VALUES ($1,$2)", [competitionId, name]);
+    }
+  }
+  // Форма з шаблону
+  await pool.query(
+    `INSERT INTO competition_forms (competition_id, fields_json) VALUES ($1,$2)
+     ON CONFLICT (competition_id) DO UPDATE SET fields_json = EXCLUDED.fields_json`,
+    [competitionId, JSON.stringify(Array.isArray(data.fields) ? data.fields : [])]
+  );
+  await logAction("Створено конкурс із шаблону", req.user.id, title);
+  res.status(201).json({ competition: comp.rows[0] });
+});
+
+app.delete("/api/methodist/templates/:id", methodistOnly, async (req, res) => {
+  const tid = parseInt(req.params.id, 10);
+  const t = await pool.query("SELECT * FROM competition_templates WHERE id=$1", [tid]);
+  if (t.rowCount === 0) return res.status(404).json({ error: "Шаблон не знайдено" });
+  const privileged = req.user.role === "admin" || req.user.role === "system";
+  if (!privileged && t.rows[0].methodist_id !== req.user.id) return res.status(403).json({ error: "Недостатньо прав" });
+  await pool.query("DELETE FROM competition_templates WHERE id=$1", [tid]);
+  res.json({ message: "Шаблон видалено" });
+});
+
+// ---------------------------------------------------------------------------
+//  ЗАЯВКИ
+// ---------------------------------------------------------------------------
+app.get("/api/methodist/applications", methodistOnly, async (req, res) => {
+  const params = req.user.role === "methodist" ? [req.user.id] : [];
+  const r = await pool.query(
+    `SELECT a.*, c.title AS competition_title, s.name AS section_name,
+            sp.full_name AS student_name, su.email AS student_email,
+            (SELECT COUNT(*)::int FROM application_files f WHERE f.application_id = a.id) AS files_count
+       FROM applications a
+       JOIN competitions c ON c.id = a.competition_id
+       LEFT JOIN competition_sections s ON s.id = a.section_id
+       LEFT JOIN users su ON su.id = a.student_id
+       LEFT JOIN user_profiles sp ON sp.user_id = a.student_id
+      ${req.user.role === "methodist" ? "WHERE c.methodist_id = $1" : ""}
+      ORDER BY a.created_at DESC`,
+    params
+  );
+  res.json({ applications: r.rows });
+});
+
+app.patch("/api/methodist/applications/:id", methodistOnly, async (req, res) => {
+  const aid = parseInt(req.params.id, 10);
+  const { status } = req.body || {};
+  if (!["submitted", "accepted", "rejected"].includes(status)) {
+    return res.status(400).json({ error: "Невідомий статус" });
+  }
+  const a = await pool.query(
+    `SELECT a.id, c.methodist_id FROM applications a
+       JOIN competitions c ON c.id = a.competition_id WHERE a.id = $1`,
+    [aid]
+  );
+  if (a.rowCount === 0) return res.status(404).json({ error: "Заявку не знайдено" });
+  const privileged = req.user.role === "admin" || req.user.role === "system";
+  if (!privileged && a.rows[0].methodist_id !== req.user.id) return res.status(403).json({ error: "Недостатньо прав" });
+  const r = await pool.query("UPDATE applications SET status=$1 WHERE id=$2 RETURNING *", [status, aid]);
+  res.json({ application: r.rows[0] });
+});
+
+// ---------------------------------------------------------------------------
+//  РЕЗУЛЬТАТИ
+// ---------------------------------------------------------------------------
+app.get("/api/methodist/results", methodistOnly, async (req, res) => {
+  const params = req.user.role === "methodist" ? [req.user.id] : [];
+  const r = await pool.query(
+    `SELECT res.*, a.title AS application_title, c.title AS competition_title,
+            jp.full_name AS judge_name, ju.email AS judge_email,
+            sp.full_name AS student_name
+       FROM results res
+       JOIN applications a ON a.id = res.application_id
+       JOIN competitions c ON c.id = a.competition_id
+       LEFT JOIN users ju ON ju.id = res.judge_id
+       LEFT JOIN user_profiles jp ON jp.user_id = res.judge_id
+       LEFT JOIN user_profiles sp ON sp.user_id = a.student_id
+      ${req.user.role === "methodist" ? "WHERE c.methodist_id = $1" : ""}
+      ORDER BY res.created_at DESC`,
+    params
+  );
+  res.json({ results: r.rows });
+});
+
+// ---------------------------------------------------------------------------
+//  ПРОФІЛЬ
+// ---------------------------------------------------------------------------
+app.put("/api/methodist/profile", methodistOnly, async (req, res) => {
+  const full_name = (req.body?.full_name || "").trim() || null;
+  const phone = (req.body?.phone || "").trim() || null;
+  const upd = await pool.query(
+    "UPDATE user_profiles SET full_name=$2, phone=$3 WHERE user_id=$1 RETURNING id",
+    [req.user.id, full_name, phone]
+  );
+  if (upd.rowCount === 0) {
+    await pool.query(
+      "INSERT INTO user_profiles (user_id, full_name, phone) VALUES ($1,$2,$3)",
+      [req.user.id, full_name, phone]
+    );
+  }
+  res.json({ message: "Профіль збережено" });
 });
 
 // ----------------------------------------------------------------------------

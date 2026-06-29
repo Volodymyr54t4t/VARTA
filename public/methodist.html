@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="uk" class="bg-admin">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VARTA — Панель методиста</title>
+    <link rel="stylesheet" href="./methodist.css" />
+</head>
+
+<body>
+    <div class="admin-shell">
+        <!-- Бічна навігація -->
+        <aside class="sidebar">
+            <div class="logo">
+                <span class="logo-mark">V</span>
+                <div>
+                    <strong>VARTA</strong>
+                    <small>Панель методиста</small>
+                </div>
+            </div>
+            <nav class="nav">
+                <button class="nav-item active" data-page="dashboard">Dashboard</button>
+                <button class="nav-item" data-page="competitions">Всі конкурси</button>
+                <button class="nav-item" data-page="create">Створити конкурс</button>
+                <button class="nav-item" data-page="templates">Шаблони конкурсів</button>
+                <button class="nav-item" data-page="applications">Заявки</button>
+                <button class="nav-item" data-page="results">Результати</button>
+                <button class="nav-item" data-page="analytics">Аналітика</button>
+                <button class="nav-item" data-page="jury">Панель журі</button>
+                <button class="nav-item" data-page="rules">Положення</button>
+                <button class="nav-item" data-page="archive">Архів</button>
+                <button class="nav-item" data-page="profile">Профіль</button>
+            </nav>
+            <button id="logoutBtn" class="logout">Вийти</button>
+        </aside>
+
+        <!-- Основна область -->
+        <main class="content">
+            <header class="topbar">
+                <h1 id="pageTitle">Dashboard</h1>
+                <div class="who"><span id="userEmail">—</span><span class="role-pill">Методист</span></div>
+            </header>
+
+            <div id="toast" class="toast"></div>
+
+            <!-- Dashboard -->
+            <section class="page" data-page="dashboard">
+                <div class="cards" id="statCards"></div>
+                <div class="panel">
+                    <h2>Як це працює</h2>
+                    <div class="flow" id="flow">
+                        <div class="flow-step"><span class="flow-num">1</span>Конкурс</div>
+                        <div class="flow-arrow">→</div>
+                        <div class="flow-step"><span class="flow-num">2</span>Секції</div>
+                        <div class="flow-arrow">→</div>
+                        <div class="flow-step"><span class="flow-num">3</span>Форма</div>
+                        <div class="flow-arrow">→</div>
+                        <div class="flow-step"><span class="flow-num">4</span>Положення</div>
+                        <div class="flow-arrow">→</div>
+                        <div class="flow-step"><span class="flow-num">5</span>Призначити журі</div>
+                        <div class="flow-arrow">→</div>
+                        <div class="flow-step"><span class="flow-num">6</span>Публікація</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Всі конкурси -->
+            <section class="page hidden" data-page="competitions">
+                <div class="panel">
+                    <h2>Активні та чернеткові конкурси</h2>
+                    <p class="hint">Натисніть «Налаштувати», щоб додати секції, форму, положення, призначити журі та опублікувати.</p>
+                    <table class="tbl">
+                        <thead>
+                            <tr>
+                                <th>Назва</th>
+                                <th>Статус</th>
+                                <th>Секцій</th>
+                                <th>Журі</th>
+                                <th>Заявок</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="competitionsBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Створити конкурс -->
+            <section class="page hidden" data-page="create">
+                <div class="panel">
+                    <h2>Новий конкурс</h2>
+                    <p class="hint">Створіть базовий запис конкурсу. Далі ви налаштуєте секції, форму, положення та журі.</p>
+                    <form id="createForm" class="stack-form">
+                        <label>Назва конкурсу
+                            <input type="text" id="cTitle" placeholder="напр. Конкурс юних дослідників" required />
+                        </label>
+                        <label>Опис
+                            <textarea id="cDesc" rows="3" placeholder="Короткий опис конкурсу"></textarea>
+                        </label>
+                        <div class="row2">
+                            <label>Дата початку
+                                <input type="date" id="cStart" />
+                            </label>
+                            <label>Дата завершення
+                                <input type="date" id="cEnd" />
+                            </label>
+                        </div>
+                        <button class="btn">Створити конкурс</button>
+                    </form>
+                </div>
+            </section>
+
+            <!-- Шаблони -->
+            <section class="page hidden" data-page="templates">
+                <div class="panel">
+                    <h2>Новий шаблон</h2>
+                    <p class="hint">Шаблон зберігає типову структуру конкурсу (назва, секції, поля форми) у форматі JSON.</p>
+                    <form id="templateForm" class="stack-form">
+                        <label>Назва шаблону
+                            <input type="text" id="tName" placeholder="напр. Стандартний предметний конкурс" required />
+                        </label>
+                        <label>Дані шаблону (JSON)
+                            <textarea id="tData" rows="6" placeholder='{"title":"...","description":"...","sections":["Секція 1"],"fields":[{"label":"ПІБ","type":"text","required":true}]}'></textarea>
+                        </label>
+                        <button class="btn">Зберегти шаблон</button>
+                    </form>
+                </div>
+                <div class="panel">
+                    <h2>Мої шаблони</h2>
+                    <table class="tbl">
+                        <thead>
+                            <tr>
+                                <th>Назва</th>
+                                <th>Автор</th>
+                                <th>Створено</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="templatesBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Заявки -->
+            <section class="page hidden" data-page="applications">
+                <div class="panel">
+                    <h2>Заявки на конкурси</h2>
+                    <table class="tbl">
+                        <thead>
+                            <tr>
+                                <th>Заявка</th>
+                                <th>Конкурс</th>
+                                <th>Секція</th>
+                                <th>Учень</th>
+                                <th>Файли</th>
+                                <th>Статус</th>
+                            </tr>
+                        </thead>
+                        <tbody id="applicationsBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Результати -->
+            <section class="page hidden" data-page="results">
+                <div class="panel">
+                    <h2>Результати оцінювання</h2>
+                    <table class="tbl">
+                        <thead>
+                            <tr>
+                                <th>Конкурс</th>
+                                <th>Заявка</th>
+                                <th>Учень</th>
+                                <th>Суддя</th>
+                                <th>Бал</th>
+                                <th>Коментар</th>
+                            </tr>
+                        </thead>
+                        <tbody id="resultsBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Аналітика -->
+            <section class="page hidden" data-page="analytics">
+                <div class="panel">
+                    <h2>Конкурси за статусом</h2>
+                    <div id="analyticsStatus" class="role-bars"></div>
+                </div>
+                <div class="panel">
+                    <h2>Заявки за конкурсами (топ-10)</h2>
+                    <div id="analyticsApps" class="role-bars"></div>
+                </div>
+                <div class="panel">
+                    <h2>Заявки за статусом</h2>
+                    <div id="analyticsAppStatus" class="role-bars"></div>
+                </div>
+            </section>
+
+            <!-- Панель журі -->
+            <section class="page hidden" data-page="jury">
+                <div class="panel">
+                    <h2>Призначення журі</h2>
+                    <p class="hint">Оберіть конкурс, щоб призначити або зняти суддів.</p>
+                    <table class="tbl">
+                        <thead>
+                            <tr>
+                                <th>Конкурс</th>
+                                <th>Статус</th>
+                                <th>Суддів</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="juryBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Положення -->
+            <section class="page hidden" data-page="rules">
+                <div class="panel">
+                    <h2>Положення конкурсів</h2>
+                    <p class="hint">Оберіть конкурс, щоб відредагувати його положення.</p>
+                    <table class="tbl">
+                        <thead>
+                            <tr>
+                                <th>Конкурс</th>
+                                <th>Статус</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="rulesBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Архів -->
+            <section class="page hidden" data-page="archive">
+                <div class="panel">
+                    <h2>Архів конкурсів</h2>
+                    <table class="tbl">
+                        <thead>
+                            <tr>
+                                <th>Назва</th>
+                                <th>Заявок</th>
+                                <th>Створено</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="archiveBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Профіль -->
+            <section class="page hidden" data-page="profile">
+                <div class="panel">
+                    <h2>Мій профіль</h2>
+                    <form id="profileForm" class="stack-form">
+                        <label>Email
+                            <input type="email" id="pEmail" disabled />
+                        </label>
+                        <label>Повне ім'я
+                            <input type="text" id="pName" placeholder="Прізвище Ім'я По батькові" />
+                        </label>
+                        <label>Телефон
+                            <input type="text" id="pPhone" placeholder="+380..." />
+                        </label>
+                        <button class="btn">Зберегти профіль</button>
+                    </form>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Модальне вікно налаштування конкурсу -->
+    <div id="modal" class="modal-overlay hidden">
+        <div class="modal">
+            <div class="modal-head">
+                <div>
+                    <h2 id="modalTitle">Конкурс</h2>
+                    <span id="modalStatus" class="status"></span>
+                </div>
+                <button id="modalClose" class="icon-btn" aria-label="Закрити">✕</button>
+            </div>
+
+            <div class="tabs">
+                <button class="tab active" data-tab="sections">Секції</button>
+                <button class="tab" data-tab="form">Форма</button>
+                <button class="tab" data-tab="rules">Положення</button>
+                <button class="tab" data-tab="judges">Журі</button>
+            </div>
+
+            <div class="modal-body">
+                <!-- Секції -->
+                <div class="tab-panel" data-tab="sections">
+                    <form id="sectionForm" class="inline-form">
+                        <input type="text" id="sectionName" placeholder="Назва секції" required />
+                        <input type="text" id="sectionDesc" placeholder="Опис (необов'язково)" />
+                        <button class="btn">Додати секцію</button>
+                    </form>
+                    <ul id="sectionsList" class="item-list"></ul>
+                </div>
+
+                <!-- Форма -->
+                <div class="tab-panel hidden" data-tab="form">
+                    <p class="hint">Додайте поля, які заповнюватиме учень при поданні заявки.</p>
+                    <form id="fieldForm" class="inline-form">
+                        <input type="text" id="fieldLabel" placeholder="Назва поля" required />
+                        <select id="fieldType">
+                            <option value="text">Текст</option>
+                            <option value="textarea">Багаторядковий текст</option>
+                            <option value="number">Число</option>
+                            <option value="date">Дата</option>
+                            <option value="file">Файл</option>
+                        </select>
+                        <label class="chk"><input type="checkbox" id="fieldRequired" /> Обов'язкове</label>
+                        <button class="btn">Додати поле</button>
+                    </form>
+                    <ul id="fieldsList" class="item-list"></ul>
+                    <button id="saveFormBtn" class="btn ok">Зберегти форму</button>
+                </div>
+
+                <!-- Положення -->
+                <div class="tab-panel hidden" data-tab="rules">
+                    <form id="rulesForm" class="stack-form">
+                        <label>Текст положення
+                            <textarea id="rulesContent" rows="8" placeholder="Опишіть правила, критерії та умови участі"></textarea>
+                        </label>
+                        <label>Посилання на файл (необов'язково)
+                            <input type="text" id="rulesFile" placeholder="https://..." />
+                        </label>
+                        <button class="btn ok">Зберегти положення</button>
+                    </form>
+                </div>
+
+                <!-- Журі -->
+                <div class="tab-panel hidden" data-tab="judges">
+                    <form id="judgeForm" class="inline-form">
+                        <select id="judgeUser" required></select>
+                        <select id="judgeRole">
+                            <option value="judge">Суддя</option>
+                            <option value="head">Голова журі</option>
+                        </select>
+                        <button class="btn">Призначити</button>
+                    </form>
+                    <ul id="judgesList" class="item-list"></ul>
+                </div>
+            </div>
+
+            <div class="modal-foot">
+                <button id="archiveBtn" class="btn ghost">В архів</button>
+                <button id="publishBtn" class="btn ok">Опублікувати</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="./methodist.js"></script>
+</body>
+
+</html>
