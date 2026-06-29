@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="uk" class="bg-admin">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VARTA — Панель учня</title>
+    <!-- Спільні стилі панелі (ті самі, що й у методиста/завуча/вчителя) -->
+    <link rel="stylesheet" href="./methodist.css" />
+</head>
+
+<body>
+    <div class="admin-shell">
+        <!-- Бічна навігація -->
+        <aside class="sidebar">
+            <div class="logo">
+                <span class="logo-mark">V</span>
+                <div>
+                    <strong>VARTA</strong>
+                    <small>Панель учня</small>
+                </div>
+            </div>
+            <nav class="nav">
+                <button class="nav-item active" data-page="dashboard">Dashboard</button>
+                <button class="nav-item" data-page="competitions">Всі конкурси</button>
+                <button class="nav-item" data-page="submit">Подати заявку</button>
+                <button class="nav-item" data-page="applications">Мої заявки</button>
+                <button class="nav-item" data-page="results">Результати</button>
+                <button class="nav-item" data-page="portfolio">Портфоліо</button>
+                <button class="nav-item" data-page="achievements">Досягнення</button>
+                <button class="nav-item" data-page="certificates">Сертифікати</button>
+                <button class="nav-item" data-page="profile">Профіль</button>
+            </nav>
+            <button id="logoutBtn" class="logout">Вийти</button>
+        </aside>
+
+        <!-- Основна область -->
+        <main class="content">
+            <header class="topbar">
+                <h1 id="pageTitle">Dashboard</h1>
+                <div class="who">
+                    <span id="schoolName">—</span>
+                    <span id="userEmail"></span>
+                    <span class="role-pill">Учень</span>
+                </div>
+            </header>
+
+            <div id="toast" class="toast"></div>
+
+            <!-- Dashboard -->
+            <section class="page" data-page="dashboard">
+                <div class="cards" id="statCards"></div>
+                <div class="panel">
+                    <h2>Як подати заявку</h2>
+                    <div class="flow">
+                        <div class="flow-step"><span class="flow-num">1</span>Конкурс</div>
+                        <div class="flow-arrow">→</div>
+                        <div class="flow-step"><span class="flow-num">2</span>Секція</div>
+                        <div class="flow-arrow">→</div>
+                        <div class="flow-step"><span class="flow-num">3</span>Форма</div>
+                        <div class="flow-arrow">→</div>
+                        <div class="flow-step"><span class="flow-num">4</span>Файли</div>
+                        <div class="flow-arrow">→</div>
+                        <div class="flow-step"><span class="flow-num">5</span>Відправка</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Всі конкурси -->
+            <section class="page hidden" data-page="competitions">
+                <div class="panel">
+                    <h2>Опубліковані конкурси</h2>
+                    <table class="tbl">
+                        <thead>
+                            <tr>
+                                <th>Конкурс</th>
+                                <th>Період</th>
+                                <th>Секцій</th>
+                                <th>Статус</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="competitionsBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Подати заявку: Конкурс → Секція → Форма → Файли → Відправка -->
+            <section class="page hidden" data-page="submit">
+                <div class="panel">
+                    <h2>Подати заявку</h2>
+                    <p class="hint">Оберіть конкурс і секцію, заповніть форму, прикріпіть файли та відправте заявку.</p>
+                    <form id="submitForm" class="stack-form">
+                        <label>Конкурс
+                            <select id="subCompetition" required></select>
+                        </label>
+                        <label>Секція
+                            <select id="subSection"></select>
+                        </label>
+                        <label>Назва роботи
+                            <input type="text" id="subTitle" placeholder="Тема / назва проєкту" />
+                        </label>
+                        <!-- Динамічні поля форми конкурсу -->
+                        <div id="dynamicFields"></div>
+                        <!-- Файли -->
+                        <div class="panel sub">
+                            <h3>Файли</h3>
+                            <p class="hint">Додайте посилання на файли роботи (документ, презентація, зображення тощо).
+                            </p>
+                            <div id="fileRows"></div>
+                            <button type="button" class="btn sm ghost" id="addFileBtn">+ Додати файл</button>
+                        </div>
+                        <button class="btn">Відправити заявку</button>
+                    </form>
+                </div>
+            </section>
+
+            <!-- Мої заявки -->
+            <section class="page hidden" data-page="applications">
+                <div class="panel">
+                    <h2>Мої заявки</h2>
+                    <table class="tbl">
+                        <thead>
+                            <tr>
+                                <th>Конкурс</th>
+                                <th>Секція</th>
+                                <th>Назва</th>
+                                <th>Файлів</th>
+                                <th>Статус</th>
+                                <th>Подано</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="applicationsBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Результати -->
+            <section class="page hidden" data-page="results">
+                <div class="panel">
+                    <h2>Мої результати</h2>
+                    <table class="tbl">
+                        <thead>
+                            <tr>
+                                <th>Конкурс</th>
+                                <th>Секція</th>
+                                <th>Статус</th>
+                                <th>Бал</th>
+                                <th>Журі</th>
+                                <th>Коментар</th>
+                            </tr>
+                        </thead>
+                        <tbody id="resultsBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Портфоліо -->
+            <section class="page hidden" data-page="portfolio">
+                <div class="panel">
+                    <h2>Додати до портфоліо</h2>
+                    <form id="portfolioForm" class="inline-form">
+                        <input type="text" id="pfTitle" placeholder="Назва роботи" required />
+                        <input type="text" id="pfDesc" placeholder="Опис" />
+                        <input type="url" id="pfUrl" placeholder="Посилання на файл" />
+                        <button class="btn">Додати</button>
+                    </form>
+                </div>
+                <div class="panel">
+                    <h2>Моє портфоліо</h2>
+                    <table class="tbl">
+                        <thead>
+                            <tr>
+                                <th>Назва</th>
+                                <th>Опис</th>
+                                <th>Файл</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="portfolioBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Досягнення -->
+            <section class="page hidden" data-page="achievements">
+                <div class="panel">
+                    <h2>Додати досягнення</h2>
+                    <form id="achievementForm" class="inline-form">
+                        <input type="text" id="acTitle" placeholder="Назва досягнення" required />
+                        <input type="text" id="acDesc" placeholder="Опис" />
+                        <input type="date" id="acDate" />
+                        <button class="btn">Додати</button>
+                    </form>
+                </div>
+                <div class="panel">
+                    <h2>Мої досягнення</h2>
+                    <table class="tbl">
+                        <thead>
+                            <tr>
+                                <th>Назва</th>
+                                <th>Опис</th>
+                                <th>Дата</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="achievementsBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Сертифікати -->
+            <section class="page hidden" data-page="certificates">
+                <div class="panel">
+                    <h2>Додати сертифікат</h2>
+                    <form id="certificateForm" class="inline-form">
+                        <input type="text" id="ctName" placeholder="Назва сертифіката" required />
+                        <input type="url" id="ctUrl" placeholder="Посилання на файл" />
+                        <input type="date" id="ctDate" />
+                        <button class="btn">Додати</button>
+                    </form>
+                </div>
+                <div class="panel">
+                    <h2>Мої сертифікати</h2>
+                    <table class="tbl">
+                        <thead>
+                            <tr>
+                                <th>Назва</th>
+                                <th>Файл</th>
+                                <th>Видано</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="certificatesBody"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Профіль -->
+            <section class="page hidden" data-page="profile">
+                <div class="panel">
+                    <h2>Мій профіль</h2>
+                    <form id="profileForm" class="stack-form">
+                        <label>Email
+                            <input type="email" id="pEmail" disabled />
+                        </label>
+                        <label>Повне ім'я
+                            <input type="text" id="pName" placeholder="Прізвище Ім'я По батькові" />
+                        </label>
+                        <label>Телефон
+                            <input type="text" id="pPhone" placeholder="+380..." />
+                        </label>
+                        <button class="btn">Зберегти профіль</button>
+                    </form>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="./student.js"></script>
+</body>
+
+</html>
