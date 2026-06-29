@@ -4,20 +4,13 @@ const $ = (id) => document.getElementById(id);
 
 const PAGE_TITLES = {
   dashboard: "Dashboard",
-  competitions: "Всі конкурси",
+  competitions: "Конкурси",
   submit: "Подати заявку",
   applications: "Мої заявки",
   results: "Результати",
-  portfolio: "Портфоліо",
-  achievements: "Досягнення",
-  certificates: "Сертифікати",
+  diplomas: "Дипломи",
+  notifications: "Сповіщення",
   profile: "Профіль",
-};
-
-const COMP_STATUS = {
-  draft: "Чернетка",
-  published: "Опубліковано",
-  archived: "В архіві",
 };
 
 const APP_STATUS = {
@@ -25,6 +18,8 @@ const APP_STATUS = {
   accepted: "Прийнято",
   rejected: "Відхилено",
 };
+
+const PLACE_CLASS = { 1: "gold", 2: "silver", 3: "bronze" };
 
 // ---- HTTP-хелпери -----------------------------------------------------------
 async function getJSON(url) {
@@ -66,9 +61,8 @@ const loaders = {
   submit: loadSubmit,
   applications: loadApplications,
   results: loadResults,
-  portfolio: loadPortfolio,
-  achievements: loadAchievements,
-  certificates: loadCertificates,
+  diplomas: loadDiplomas,
+  notifications: loadNotifications,
   profile: loadProfile,
 };
 
@@ -87,7 +81,7 @@ $("logoutBtn").onclick = async () => {
   window.location.href = "/";
 };
 
-// ---- Інформація про учня ----------------------------------------------------
+// ---- Інформація про учня / школу --------------------------------------------
 async function loadMe() {
   const { user } = await getJSON("/api/me");
   $("userEmail").textContent = user.email;
@@ -95,12 +89,14 @@ async function loadMe() {
   $("pName").value = user.full_name || "";
   $("pPhone").value = user.phone || "";
 
-  const info = await getJSON("/api/student/me");
-  if (info.student && info.student.school_name) {
-    const cls = info.student.class ? ` · ${info.student.class}` : "";
-    $("schoolName").textContent = `${info.student.school_name}${cls}`;
+  const { info } = await getJSON("/api/student/me");
+  if (info && info.school_name) {
+    const klass = info.class ? ` · ${info.class}` : "";
+    $("schoolName").textContent = `${info.school_name} · ${info.city_name}${klass}`;
+    $("noSchoolBanner").classList.add("hidden");
   } else {
     $("schoolName").textContent = "Школу не призначено";
+    $("noSchoolBanner").classList.remove("hidden");
   }
 }
 
@@ -108,19 +104,19 @@ async function loadMe() {
 async function loadDashboard() {
   const { stats } = await getJSON("/api/student/stats");
   const cards = [
-    ["Заявок", stats.applications],
+    ["Моїх заявок", stats.applications],
     ["Прийнято", stats.accepted],
     ["Очікують", stats.pending],
+    ["Відхилено", stats.rejected],
+    ["Дипломів", stats.diplomas],
     ["Середній бал", stats.avgScore],
-    ["Досягнень", stats.achievements],
-    ["Сертифікатів", stats.certificates],
   ];
   $("statCards").innerHTML = cards
     .map(([lbl, num]) => `<div class="card"><div class="num">${num}</div><div class="lbl">${lbl}</div></div>`)
     .join("");
 }
 
-// ---- Всі конкурси -----------------------------------------------------------
+// ---- Конкурси ---------------------------------------------------------------
 async function loadCompetitions() {
   const { competitions } = await getJSON("/api/student/competitions");
   $("competitionsBody").innerHTML = competitions.length
@@ -130,116 +126,109 @@ async function loadCompetitions() {
             <td>${esc(c.title)}</td>
             <td>${fmtDate(c.starts_at)} — ${fmtDate(c.ends_at)}</td>
             <td>${c.sections}</td>
-            <td>${c.applied ? '<span class="status accepted">Подано</span>' : "—"}</td>
-            <td>${c.applied ? "" : `<button class="btn sm" data-apply="${c.id}">Подати заявку</button>`}</td>
+            <td>${
+              c.applied
+                ? `<span class="status accepted">Подано</span>`
+                : `<button class="btn sm" data-apply="${c.id}">Подати заявку</button>`
+            }</td>
           </tr>`
         )
         .join("")
-    : `<tr><td colspan="5" class="empty">Немає опублікованих конкурсів</td></tr>`;
+    : `<tr><td colspan="4" class="empty">Немає опублікованих конкурсів</td></tr>`;
 
   $("competitionsBody").querySelectorAll("[data-apply]").forEach((b) => {
-    b.onclick = async () => {
+    b.onclick = () => {
       switchPage("submit");
       setTimeout(() => {
         $("subCompetition").value = b.dataset.apply;
         $("subCompetition").dispatchEvent(new Event("change"));
-      }, 60);
+      }, 50);
     };
   });
 }
 
-// ---- Подати заявку: Конкурс → Секція → Форма → Файли → Відправка -------------
+// ---- Подати заявку ----------------------------------------------------------
 async function loadSubmit() {
   const { competitions } = await getJSON("/api/student/competitions");
   const available = competitions.filter((c) => !c.applied);
   $("subCompetition").innerHTML = available.length
     ? available.map((c) => `<option value="${c.id}">${esc(c.title)}</option>`).join("")
     : `<option value="">Немає доступних конкурсів</option>`;
-  resetFiles();
-  await loadForm();
+  await loadSections();
 }
 
-// Завантажує секції + динамічні поля форми конкурсу
-async function loadForm() {
+async function loadSections() {
   const compId = $("subCompetition").value;
   if (!compId) {
     $("subSection").innerHTML = `<option value="">—</option>`;
-    $("dynamicFields").innerHTML = "";
+    $("subFormFields").innerHTML = "";
     return;
   }
-  const { sections, fields } = await getJSON(`/api/student/competitions/${compId}/form`);
+  const { sections } = await getJSON(`/api/student/competitions/${compId}/sections`);
   $("subSection").innerHTML =
     `<option value="">Без секції</option>` +
     sections.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
+  await loadFormFields(compId);
+}
 
-  // Динамічні поля форми (з налаштувань конкурсу)
-  $("dynamicFields").innerHTML = Array.isArray(fields) && fields.length
-    ? fields
-        .map((f, i) => {
-          const label = esc(f.label || f.name || `Поле ${i + 1}`);
-          const key = esc(f.name || `field_${i}`);
-          if (f.type === "textarea") {
-            return `<label>${label}<textarea data-field="${key}" placeholder="${label}"></textarea></label>`;
-          }
-          return `<label>${label}<input type="text" data-field="${key}" placeholder="${label}" /></label>`;
-        })
-        .join("")
-    : "";
+// Поля форми, які задав методист під час створення конкурсу
+async function loadFormFields(compId) {
+  const { fields } = await getJSON(`/api/student/competitions/${compId}/form`);
+  if (!fields || !fields.length) {
+    $("subFormFields").innerHTML = "";
+    return;
+  }
+  $("subFormFields").innerHTML = fields
+    .map((f, i) => {
+      const req = f.required ? "required" : "";
+      const star = f.required ? ' <span class="req">*</span>' : "";
+      const id = `field_${i}`;
+      let control = "";
+      if (f.type === "textarea") {
+        control = `<textarea id="${id}" data-label="${esc(f.label)}" rows="4" ${req}></textarea>`;
+      } else if (f.type === "file") {
+        control = `<input type="file" id="${id}" data-label="${esc(f.label)}" data-file="1" name="${id}" ${req} />`;
+      } else {
+        const t = f.type === "number" ? "number" : f.type === "date" ? "date" : "text";
+        control = `<input type="${t}" id="${id}" data-label="${esc(f.label)}" ${req} />`;
+      }
+      return `<label>${esc(f.label)}${star}${control}</label>`;
+    })
+    .join("");
 }
-$("subCompetition").addEventListener("change", loadForm);
-
-// Файли
-function resetFiles() {
-  $("fileRows").innerHTML = "";
-  addFileRow();
-}
-function addFileRow() {
-  const row = document.createElement("div");
-  row.className = "inline-form file-row";
-  row.innerHTML = `
-    <input type="url" class="file-url" placeholder="Посилання на файл" />
-    <select class="file-type">
-      <option value="document">Документ</option>
-      <option value="presentation">Презентація</option>
-      <option value="image">Зображення</option>
-      <option value="archive">Архів</option>
-      <option value="other">Інше</option>
-    </select>
-    <button type="button" class="btn sm danger remove-file">✕</button>`;
-  row.querySelector(".remove-file").onclick = () => row.remove();
-  $("fileRows").appendChild(row);
-}
-$("addFileBtn").onclick = addFileRow;
+$("subCompetition").addEventListener("change", loadSections);
 
 $("submitForm").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const competition_id = $("subCompetition").value;
-  if (!competition_id) return toast("err", "Оберіть конкурс");
+  const compId = $("subCompetition").value;
+  if (!compId) return toast("err", "Оберіть конкурс");
 
-  // Збираємо динамічні поля форми
+  // Збираємо відповіді на поля форми конкурсу
   const data_json = {};
-  $("dynamicFields").querySelectorAll("[data-field]").forEach((el) => {
-    data_json[el.dataset.field] = el.value.trim();
-  });
-  // Збираємо файли
-  const files = [];
-  $("fileRows").querySelectorAll(".file-row").forEach((row) => {
-    const url = row.querySelector(".file-url").value.trim();
-    if (url) files.push({ file_url: url, file_type: row.querySelector(".file-type").value });
-  });
+  const fd = new FormData();
+  $("subFormFields")
+    .querySelectorAll("[data-label]")
+    .forEach((el) => {
+      const label = el.getAttribute("data-label");
+      if (el.dataset.file) {
+        if (el.files && el.files[0]) {
+          fd.append(el.id, el.files[0]);
+        }
+      } else {
+        data_json[label] = el.value.trim();
+      }
+    });
 
-  const body = {
-    competition_id,
-    section_id: $("subSection").value || null,
-    title: $("subTitle").value.trim(),
-    data_json,
-    files,
-  };
-  const { ok, data } = await send("POST", "/api/student/applications", body);
-  if (!ok) return toast("err", data.error || "Помилка");
+  fd.append("competition_id", compId);
+  fd.append("section_id", $("subSection").value || "");
+  fd.append("title", $("subTitle").value.trim());
+  fd.append("data_json", JSON.stringify(data_json));
+
+  const res = await fetch("/api/student/applications", { method: "POST", body: fd });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return toast("err", data.error || "Помилка");
   toast("ok", data.message);
   $("subTitle").value = "";
-  resetFiles();
   loadSubmit();
 });
 
@@ -253,19 +242,23 @@ async function loadApplications() {
             <td>${esc(a.competition_title)}</td>
             <td>${esc(a.section_name || "—")}</td>
             <td>${esc(a.title || "—")}</td>
-            <td>${a.files}</td>
             <td><span class="status ${a.status}">${APP_STATUS[a.status] || a.status}</span></td>
+            <td>${a.score != null ? a.score : "—"}</td>
             <td>${fmtDate(a.created_at)}</td>
-            <td>${a.status === "submitted" ? `<button class="btn sm danger" data-cancel="${a.id}">Скасувати</button>` : ""}</td>
+            <td>${
+              a.status === "submitted"
+                ? `<button class="btn sm danger" data-withdraw="${a.id}">Відкликати</button>`
+                : ""
+            }</td>
           </tr>`
         )
         .join("")
     : `<tr><td colspan="7" class="empty">Ви ще не подавали заявок</td></tr>`;
 
-  $("applicationsBody").querySelectorAll("[data-cancel]").forEach((b) => {
+  $("applicationsBody").querySelectorAll("[data-withdraw]").forEach((b) => {
     b.onclick = async () => {
-      if (!confirm("Скасувати заявку?")) return;
-      const { ok, data } = await send("DELETE", `/api/student/applications/${b.dataset.cancel}`);
+      if (!confirm("Відкликати цю заявку?")) return;
+      const { ok, data } = await send("DELETE", `/api/student/applications/${b.dataset.withdraw}`);
       if (!ok) return toast("err", data.error || "Помилка");
       toast("ok", data.message);
       loadApplications();
@@ -292,122 +285,49 @@ async function loadResults() {
     : `<tr><td colspan="6" class="empty">Поки що немає результатів</td></tr>`;
 }
 
-// ---- Портфоліо --------------------------------------------------------------
-async function loadPortfolio() {
-  const { items } = await getJSON("/api/student/portfolio");
-  $("portfolioBody").innerHTML = items.length
-    ? items
+// ---- Дипломи ----------------------------------------------------------------
+async function loadDiplomas() {
+  const { diplomas } = await getJSON("/api/student/diplomas");
+  $("diplomasBody").innerHTML = diplomas.length
+    ? diplomas
         .map(
-          (it) => `<tr>
-            <td>${esc(it.title)}</td>
-            <td>${esc(it.description || "—")}</td>
-            <td>${it.file_url ? `<a href="${esc(it.file_url)}" target="_blank" rel="noopener">Відкрити</a>` : "—"}</td>
-            <td><button class="btn sm danger" data-del="${it.id}">Видалити</button></td>
+          (d) => `<tr>
+            <td>${esc(d.competition_title)}</td>
+            <td><span class="place ${PLACE_CLASS[d.place] || ""}">${d.place || "—"}</span></td>
+            <td>${d.score != null ? d.score : "—"}</td>
+            <td>${fmtDate(d.issued_at)}</td>
+            <td>${
+              d.file_url
+                ? `<a class="btn sm" href="${esc(d.file_url)}" target="_blank" rel="noopener">Завантажити</a>`
+                : `<span class="hint">Готується</span>`
+            }</td>
           </tr>`
         )
         .join("")
-    : `<tr><td colspan="4" class="empty">Портфоліо порожнє</td></tr>`;
-
-  $("portfolioBody").querySelectorAll("[data-del]").forEach((b) => {
-    b.onclick = async () => {
-      const { ok, data } = await send("DELETE", `/api/student/portfolio/${b.dataset.del}`);
-      if (!ok) return toast("err", data.error || "Помилка");
-      toast("ok", data.message);
-      loadPortfolio();
-    };
-  });
+    : `<tr><td colspan="5" class="empty">У вас ще немає дипломів</td></tr>`;
 }
 
-$("portfolioForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const { ok, data } = await send("POST", "/api/student/portfolio", {
-    title: $("pfTitle").value.trim(),
-    description: $("pfDesc").value.trim(),
-    file_url: $("pfUrl").value.trim(),
-  });
-  if (!ok) return toast("err", data.error || "Помилка");
-  toast("ok", data.message);
-  $("portfolioForm").reset();
-  loadPortfolio();
-});
-
-// ---- Досягнення -------------------------------------------------------------
-async function loadAchievements() {
-  const { achievements } = await getJSON("/api/student/achievements");
-  $("achievementsBody").innerHTML = achievements.length
-    ? achievements
+// ---- Сповіщення -------------------------------------------------------------
+async function loadNotifications() {
+  const { notifications } = await getJSON("/api/student/notifications");
+  $("notificationsList").innerHTML = notifications.length
+    ? notifications
         .map(
-          (a) => `<tr>
-            <td>${esc(a.title)}</td>
-            <td>${esc(a.description || "—")}</td>
-            <td>${a.date ? fmtDate(a.date) : "—"}</td>
-            <td><button class="btn sm danger" data-del="${a.id}">Видалити</button></td>
-          </tr>`
+          (n) => `<div class="notif ${n.is_read ? "" : "unread"}">
+            <p class="notif-msg">${esc(n.message)}</p>
+            <span class="notif-date">${fmtDate(n.created_at)}</span>
+          </div>`
         )
         .join("")
-    : `<tr><td colspan="4" class="empty">Досягнень ще немає</td></tr>`;
-
-  $("achievementsBody").querySelectorAll("[data-del]").forEach((b) => {
-    b.onclick = async () => {
-      const { ok, data } = await send("DELETE", `/api/student/achievements/${b.dataset.del}`);
-      if (!ok) return toast("err", data.error || "Помилка");
-      toast("ok", data.message);
-      loadAchievements();
-    };
-  });
+    : `<div class="empty">Сповіщень немає</div>`;
 }
 
-$("achievementForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const { ok, data } = await send("POST", "/api/student/achievements", {
-    title: $("acTitle").value.trim(),
-    description: $("acDesc").value.trim(),
-    date: $("acDate").value || null,
-  });
+$("readAllBtn").onclick = async () => {
+  const { ok, data } = await send("POST", "/api/student/notifications/read-all", {});
   if (!ok) return toast("err", data.error || "Помилка");
   toast("ok", data.message);
-  $("achievementForm").reset();
-  loadAchievements();
-});
-
-// ---- Сертифікати ------------------------------------------------------------
-async function loadCertificates() {
-  const { certificates } = await getJSON("/api/student/certificates");
-  $("certificatesBody").innerHTML = certificates.length
-    ? certificates
-        .map(
-          (c) => `<tr>
-            <td>${esc(c.name)}</td>
-            <td>${c.file_url ? `<a href="${esc(c.file_url)}" target="_blank" rel="noopener">Відкрити</a>` : "—"}</td>
-            <td>${c.issued_at ? fmtDate(c.issued_at) : "—"}</td>
-            <td><button class="btn sm danger" data-del="${c.id}">Видалити</button></td>
-          </tr>`
-        )
-        .join("")
-    : `<tr><td colspan="4" class="empty">Сертифікатів ще немає</td></tr>`;
-
-  $("certificatesBody").querySelectorAll("[data-del]").forEach((b) => {
-    b.onclick = async () => {
-      const { ok, data } = await send("DELETE", `/api/student/certificates/${b.dataset.del}`);
-      if (!ok) return toast("err", data.error || "Помилка");
-      toast("ok", data.message);
-      loadCertificates();
-    };
-  });
-}
-
-$("certificateForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const { ok, data } = await send("POST", "/api/student/certificates", {
-    name: $("ctName").value.trim(),
-    file_url: $("ctUrl").value.trim(),
-    issued_at: $("ctDate").value || null,
-  });
-  if (!ok) return toast("err", data.error || "Помилка");
-  toast("ok", data.message);
-  $("certificateForm").reset();
-  loadCertificates();
-});
+  loadNotifications();
+};
 
 // ---- Профіль ----------------------------------------------------------------
 async function loadProfile() {

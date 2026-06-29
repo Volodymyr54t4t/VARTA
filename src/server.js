@@ -2195,6 +2195,288 @@ app.put("/api/teacher/profile", teacherOnly, async (req, res) => {
 });
 
 // ============================================================================
+//  ПАНЕЛЬ УЧНЯ (роль "student") — див. схему "3. УЧЕНЬ"
+//  Учень: переглядає конкурси, подає власні заявки, бачить результати/дипломи
+// ============================================================================
+const studentOnly = [authRequired, roleRequired("student", "admin", "system")];
+
+// --- Інформація про учня: школа, клас, закріплений учитель -------------------
+app.get("/api/student/me", studentOnly, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT st.class,
+              s.name AS school_name, c.name AS city_name, reg.name AS region_name,
+              tp.full_name AS teacher_name
+         FROM students st
+         LEFT JOIN schools s ON s.id = st.school_id
+         LEFT JOIN cities c ON c.id = s.city_id
+         LEFT JOIN regions reg ON reg.id = c.region_id
+         LEFT JOIN user_profiles tp ON tp.user_id = st.teacher_id
+        WHERE st.user_id = $1
+        ORDER BY st.id LIMIT 1`,
+      [req.user.id]
+    );
+    res.json({ info: r.rows[0] || null });
+  } catch (err) {
+    console.log("[v0] Помилка /student/me:", err.message);
+    res.status(500).json({ error: "Внутрішня помилка серверу" });
+  }
+});
+
+// --- Dashboard: статистика учня ----------------------------------------------
+app.get("/api/student/stats", studentOnly, async (req, res) => {
+  try {
+    const uid = req.user.id;
+    const [apps, accepted, rejected, pending, scored, avg, diplomas] = await Promise.all([
+      pool.query("SELECT COUNT(*)::int AS c FROM applications WHERE student_id = $1", [uid]),
+      pool.query("SELECT COUNT(*)::int AS c FROM applications WHERE student_id = $1 AND status = 'accepted'", [uid]),
+      pool.query("SELECT COUNT(*)::int AS c FROM applications WHERE student_id = $1 AND status = 'rejected'", [uid]),
+      pool.query("SELECT COUNT(*)::int AS c FROM applications WHERE student_id = $1 AND status = 'submitted'", [uid]),
+      pool.query(
+        `SELECT COUNT(DISTINCT r.application_id)::int AS c FROM results r
+          WHERE r.application_id IN (SELECT id FROM applications WHERE student_id = $1)`,
+        [uid]
+      ),
+      pool.query(
+        `SELECT COALESCE(ROUND(AVG(r.score), 2), 0) AS avg FROM results r
+          WHERE r.application_id IN (SELECT id FROM applications WHERE student_id = $1)`,
+        [uid]
+      ),
+      pool.query("SELECT COUNT(*)::int AS c FROM diplomas WHERE student_id = $1", [uid]),
+    ]);
+    res.json({
+      stats: {
+        applications: apps.rows[0].c,
+        accepted: accepted.rows[0].c,
+        rejected: rejected.rows[0].c,
+        pending: pending.rows[0].c,
+        scored: scored.rows[0].c,
+        avgScore: Number(avg.rows[0].avg),
+        diplomas: diplomas.rows[0].c,
+      },
+    });
+  } catch (err) {
+    console.log("[v0] Помилка статистики учня:", err.message);
+    res.status(500).json({ error: "Внутрішня помилка серверу" });
+  }
+});
+
+// --- Опубліковані конкурси ----------------------------------------------------
+app.get("/api/student/competitions", studentOnly, async (req, res) => {
+  const r = await pool.query(
+    `SELECT c.id, c.title, c.description, c.status, c.starts_at, c.ends_at,
+            (SELECT COUNT(*)::int FROM competition_sections s WHERE s.competition_id = c.id) AS sections,
+            EXISTS (SELECT 1 FROM applications a WHERE a.competition_id = c.id AND a.student_id = $1) AS applied
+       FROM competitions c
+      WHERE c.status = 'published'
+      ORDER BY c.starts_at NULLS LAST, c.created_at DESC`,
+    [req.user.id]
+  );
+  res.json({ competitions: r.rows });
+});
+
+// --- Секції конкурсу ----------------------------------------------------------
+app.get("/api/student/competitions/:id/sections", studentOnly, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const r = await pool.query(
+    "SELECT id, name, description FROM competition_sections WHERE competition_id = $1 ORDER BY name",
+    [id]
+  );
+  res.json({ sections: r.rows });
+});
+
+// --- Форма подання конкурсу (поля, які створив методист) ----------------------
+app.get("/api/student/competitions/:id/form", studentOnly, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const r = await pool.query(
+    "SELECT fields_json FROM competition_forms WHERE competition_id = $1",
+    [id]
+  );
+  const fields = r.rowCount > 0 && Array.isArray(r.rows[0].fields_json) ? r.rows[0].fields_json : [];
+  res.json({ fields });
+});
+
+// --- Подати власну заявку -----------------------------------------------------
+//  upload.any() дозволяє приймати як звичайний JSON, так і multipart/form-data
+//  (коли у формі конкурсу є поля типу "файл").
+app.post("/api/student/applications", studentOnly, upload.any(), async (req, res) => {
+  try {
+    const competitionId = parseInt(req.body?.competition_id, 10);
+    const sectionId = req.body?.section_id ? parseInt(req.body.section_id, 10) : null;
+    const title = (req.body?.title || "").trim() || null;
+    if (!competitionId) return res.status(400).json({ error: "Оберіть конкурс" });
+
+    // Відповіді на поля форми конкурсу
+    let dataJson = {};
+    if (req.body?.data_json) {
+      try {
+        const parsed = JSON.parse(req.body.data_json);
+        if (parsed && typeof parsed === "object") dataJson = parsed;
+      } catch {
+        dataJson = {};
+      }
+    }
+
+    const comp = await pool.query("SELECT id, status, title FROM competitions WHERE id = $1", [competitionId]);
+    if (comp.rowCount === 0) return res.status(404).json({ error: "Конкурс не знайдено" });
+    if (comp.rows[0].status !== "published") {
+      return res.status(400).json({ error: "Подання можливе лише до опублікованих конкурсів" });
+    }
+    const dup = await pool.query(
+      "SELECT id FROM applications WHERE competition_id = $1 AND student_id = $2",
+      [competitionId, req.user.id]
+    );
+    if (dup.rowCount > 0) {
+      return res.status(409).json({ error: "Ви вже подали заявку на цей конкурс" });
+    }
+
+    // Перевірка обов'язкових полів форми
+    const formRow = await pool.query(
+      "SELECT fields_json FROM competition_forms WHERE competition_id = $1",
+      [competitionId]
+    );
+    const fields = formRow.rowCount > 0 && Array.isArray(formRow.rows[0].fields_json) ? formRow.rows[0].fields_json : [];
+    const fileMap = {};
+    (req.files || []).forEach((f) => {
+      fileMap[f.fieldname] = f;
+    });
+    for (let i = 0; i < fields.length; i++) {
+      const f = fields[i];
+      if (!f.required) continue;
+      if (f.type === "file") {
+        if (!fileMap[`field_${i}`]) {
+          return res.status(400).json({ error: `Завантажте файл: «${f.label}»` });
+        }
+      } else {
+        const val = dataJson[f.label];
+        if (val == null || String(val).trim() === "") {
+          return res.status(400).json({ error: `Заповніть поле: «${f.label}»` });
+        }
+      }
+    }
+
+    const ins = await pool.query(
+      `INSERT INTO applications (competition_id, student_id, section_id, title, data_json, status)
+       VALUES ($1,$2,$3,$4,$5,'submitted') RETURNING id`,
+      [competitionId, req.user.id, sectionId, title, JSON.stringify(dataJson)]
+    );
+    const applicationId = ins.rows[0].id;
+
+    // Зберігаємо завантажені файли
+    for (const file of req.files || []) {
+      await pool.query(
+        `INSERT INTO application_files (application_id, file_url, file_type) VALUES ($1,$2,$3)`,
+        [applicationId, `/uploads/${file.filename}`, file.mimetype]
+      );
+    }
+
+    await logAction("Учень подав заявку", req.user.id, `application #${applicationId}`);
+    res.status(201).json({ message: "Заявку подано", id: applicationId });
+  } catch (err) {
+    console.log("[v0] Помилка подання заявки учнем:", err.message);
+    res.status(500).json({ error: "Внутрішня помилка серверу" });
+  }
+});
+
+// --- Мої заявки ---------------------------------------------------------------
+app.get("/api/student/applications", studentOnly, async (req, res) => {
+  const r = await pool.query(
+    `SELECT a.id, a.title, a.status, a.created_at,
+            c.title AS competition_title,
+            sec.name AS section_name,
+            (SELECT ROUND(AVG(res.score), 2) FROM results res WHERE res.application_id = a.id) AS score
+       FROM applications a
+       JOIN competitions c ON c.id = a.competition_id
+       LEFT JOIN competition_sections sec ON sec.id = a.section_id
+      WHERE a.student_id = $1
+      ORDER BY a.created_at DESC`,
+    [req.user.id]
+  );
+  res.json({ applications: r.rows });
+});
+
+// --- Відкликати заявку (лише поки на розгляді) --------------------------------
+app.delete("/api/student/applications/:id", studentOnly, async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const own = await pool.query(
+    "SELECT id, status FROM applications WHERE id = $1 AND student_id = $2",
+    [id, req.user.id]
+  );
+  if (own.rowCount === 0) return res.status(404).json({ error: "Заявку не знайдено" });
+  if (own.rows[0].status !== "submitted") {
+    return res.status(400).json({ error: "Відкликати можна лише заявку, що очікує розгляду" });
+  }
+  await pool.query("DELETE FROM applications WHERE id = $1", [id]);
+  res.json({ message: "Заявку відкликано" });
+});
+
+// --- Результати моїх заявок ---------------------------------------------------
+app.get("/api/student/results", studentOnly, async (req, res) => {
+  const r = await pool.query(
+    `SELECT a.id AS application_id, a.title, a.status,
+            c.title AS competition_title,
+            sec.name AS section_name,
+            res.score, res.comment,
+            jp.full_name AS judge_name
+       FROM applications a
+       JOIN competitions c ON c.id = a.competition_id
+       LEFT JOIN competition_sections sec ON sec.id = a.section_id
+       LEFT JOIN results res ON res.application_id = a.id
+       LEFT JOIN user_profiles jp ON jp.user_id = res.judge_id
+      WHERE a.student_id = $1
+      ORDER BY a.created_at DESC`,
+    [req.user.id]
+  );
+  res.json({ results: r.rows });
+});
+
+// --- Мої дипломи --------------------------------------------------------------
+app.get("/api/student/diplomas", studentOnly, async (req, res) => {
+  const r = await pool.query(
+    `SELECT d.id, d.place, d.score, d.file_url, d.issued_at,
+            c.title AS competition_title
+       FROM diplomas d
+       JOIN competitions c ON c.id = d.competition_id
+      WHERE d.student_id = $1
+      ORDER BY d.issued_at DESC`,
+    [req.user.id]
+  );
+  res.json({ diplomas: r.rows });
+});
+
+// --- Мої сповіщення -----------------------------------------------------------
+app.get("/api/student/notifications", studentOnly, async (req, res) => {
+  const r = await pool.query(
+    `SELECT id, message, is_read, created_at FROM notifications
+      WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100`,
+    [req.user.id]
+  );
+  res.json({ notifications: r.rows });
+});
+
+app.post("/api/student/notifications/read-all", studentOnly, async (req, res) => {
+  await pool.query("UPDATE notifications SET is_read = true WHERE user_id = $1 AND is_read = false", [req.user.id]);
+  res.json({ message: "Усі сповіщення прочитано" });
+});
+
+// --- Профіль учня -------------------------------------------------------------
+app.put("/api/student/profile", studentOnly, async (req, res) => {
+  const full_name = (req.body?.full_name || "").trim() || null;
+  const phone = (req.body?.phone || "").trim() || null;
+  const upd = await pool.query(
+    "UPDATE user_profiles SET full_name = $2, phone = $3 WHERE user_id = $1 RETURNING id",
+    [req.user.id, full_name, phone]
+  );
+  if (upd.rowCount === 0) {
+    await pool.query(
+      "INSERT INTO user_profiles (user_id, full_name, phone) VALUES ($1,$2,$3)",
+      [req.user.id, full_name, phone]
+    );
+  }
+  res.json({ message: "Профіль збережено" });
+});
+
+// ============================================================================
 //  ПАНЕЛЬ СИСТЕМИ (роль "system" / "admin") — див. схему "7. СИСТЕМА"
 //  Автоматизований конвеєр: Результати → Рейтинг → Дипломи → Протоколи → Архів
 // ============================================================================
