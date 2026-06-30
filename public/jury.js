@@ -4,28 +4,15 @@ const $ = (id) => document.getElementById(id);
 
 const PAGE_TITLES = {
   dashboard: "Dashboard",
-  competitions: "Призначені конкурси",
-  works: "Роботи",
-  rating: "Рейтинг",
-  comments: "Коментарі",
+  competitions: "Мої конкурси",
+  review: "Оцінювання",
   profile: "Профіль",
-};
-
-const COMP_STATUS = {
-  draft: "Чернетка",
-  published: "Опубліковано",
-  archived: "В архіві",
 };
 
 const APP_STATUS = {
   submitted: "Очікує",
   accepted: "Прийнято",
   rejected: "Відхилено",
-};
-
-const JUDGE_ROLE = {
-  judge: "Суддя",
-  head: "Голова журі",
 };
 
 // ---- HTTP-хелпери -----------------------------------------------------------
@@ -65,9 +52,7 @@ function esc(s) {
 const loaders = {
   dashboard: loadDashboard,
   competitions: loadCompetitions,
-  works: loadWorks,
-  rating: loadRating,
-  comments: loadComments,
+  review: loadReview,
   profile: loadProfile,
 };
 
@@ -86,28 +71,22 @@ $("logoutBtn").onclick = async () => {
   window.location.href = "/";
 };
 
-// Кеш списку конкурсів для фільтрів
-let competitionsCache = [];
-
-// ---- Інформація про журі ----------------------------------------------------
+// ---- Інформація про суддю ---------------------------------------------------
 async function loadMe() {
   const { user } = await getJSON("/api/me");
   $("userEmail").textContent = user.email;
   $("pEmail").value = user.email;
   $("pName").value = user.full_name || "";
   $("pPhone").value = user.phone || "";
-
-  const info = await getJSON("/api/jury/me");
-  $("assignedInfo").textContent = `Конкурсів: ${info.assignedCount}`;
 }
 
 // ---- Dashboard --------------------------------------------------------------
 async function loadDashboard() {
   const { stats } = await getJSON("/api/jury/stats");
   const cards = [
-    ["Конкурсів", stats.competitions],
-    ["Робіт усього", stats.works],
-    ["Оцінено мною", stats.scored],
+    ["Моїх конкурсів", stats.competitions],
+    ["Усього заявок", stats.applications],
+    ["Оцінено", stats.scored],
     ["Очікують оцінки", stats.pending],
     ["Середній бал", stats.avgScore],
   ];
@@ -116,202 +95,120 @@ async function loadDashboard() {
     .join("");
 }
 
-// ---- Призначені конкурси ----------------------------------------------------
+// ---- Мої конкурси -----------------------------------------------------------
 async function loadCompetitions() {
   const { competitions } = await getJSON("/api/jury/competitions");
-  competitionsCache = competitions;
   $("competitionsBody").innerHTML = competitions.length
     ? competitions
         .map(
           (c) => `<tr>
             <td>${esc(c.title)}</td>
             <td>${fmtDate(c.starts_at)} — ${fmtDate(c.ends_at)}</td>
-            <td>${JUDGE_ROLE[c.judge_role] || esc(c.judge_role)}</td>
-            <td>${c.apps_count}</td>
-            <td>${c.scored_count} / ${c.apps_count}</td>
-            <td><button class="btn sm" data-works="${c.id}">Оцінити роботи</button></td>
+            <td>${c.applications}</td>
+            <td>${c.scored} / ${c.applications}</td>
+            <td><button class="btn sm" data-review="${c.id}">Оцінювати</button></td>
           </tr>`
         )
         .join("")
-    : `<tr><td colspan="6" class="empty">Вас ще не призначено до жодного конкурсу</td></tr>`;
+    : `<tr><td colspan="5" class="empty">Вас ще не призначено до конкурсів</td></tr>`;
 
-  $("competitionsBody").querySelectorAll("[data-works]").forEach((b) => {
+  $("competitionsBody").querySelectorAll("[data-review]").forEach((b) => {
     b.onclick = () => {
-      switchPage("works");
+      switchPage("review");
       setTimeout(() => {
-        $("worksCompFilter").value = b.dataset.works;
-        loadWorksTable();
-      }, 60);
+        $("reviewCompetition").value = b.dataset.review;
+        $("reviewCompetition").dispatchEvent(new Event("change"));
+      }, 50);
     };
   });
 }
 
-// ---- Роботи -----------------------------------------------------------------
-async function ensureCompetitions() {
-  if (!competitionsCache.length) {
-    const { competitions } = await getJSON("/api/jury/competitions");
-    competitionsCache = competitions;
+// ---- Оцінювання -------------------------------------------------------------
+async function loadReview() {
+  const { competitions } = await getJSON("/api/jury/competitions");
+  $("reviewCompetition").innerHTML = competitions.length
+    ? competitions.map((c) => `<option value="${c.id}">${esc(c.title)}</option>`).join("")
+    : `<option value="">Немає призначених конкурсів</option>`;
+  await loadApplicationsForReview();
+}
+
+$("reviewCompetition").addEventListener("change", loadApplicationsForReview);
+
+async function loadApplicationsForReview() {
+  const cid = $("reviewCompetition").value;
+  if (!cid) {
+    $("reviewList").innerHTML = `<div class="empty">Оберіть конкурс</div>`;
+    return;
   }
-  return competitionsCache;
-}
+  const { applications } = await getJSON(`/api/jury/competitions/${cid}/applications`);
+  if (!applications.length) {
+    $("reviewList").innerHTML = `<div class="empty">У цьому конкурсі ще немає заявок</div>`;
+    return;
+  }
+  $("reviewList").innerHTML = applications.map(renderReviewCard).join("");
 
-function fillCompFilter(selectId) {
-  const sel = $(selectId);
-  const current = sel.value;
-  sel.innerHTML =
-    `<option value="">Усі конкурси</option>` +
-    competitionsCache.map((c) => `<option value="${c.id}">${esc(c.title)}</option>`).join("");
-  if (current) sel.value = current;
-}
-
-async function loadWorks() {
-  await ensureCompetitions();
-  fillCompFilter("worksCompFilter");
-  await loadWorksTable();
-}
-
-async function loadWorksTable() {
-  const compId = $("worksCompFilter").value;
-  const url = compId ? `/api/jury/applications?competition_id=${compId}` : "/api/jury/applications";
-  const { applications } = await getJSON(url);
-  $("worksBody").innerHTML = applications.length
-    ? applications
-        .map(
-          (a) => `<tr>
-            <td>${esc(a.title || "Без назви")}</td>
-            <td>${esc(a.competition_title)}</td>
-            <td>${esc(a.section_name || "—")}</td>
-            <td>${esc(a.student_name || "—")}</td>
-            <td>${a.files_count}</td>
-            <td>${a.my_score != null ? `<strong>${a.my_score}</strong>` : '<span class="status submitted">Не оцінено</span>'}</td>
-            <td><button class="btn sm" data-score="${a.id}">${a.my_score != null ? "Змінити" : "Оцінити"}</button></td>
-          </tr>`
-        )
-        .join("")
-    : `<tr><td colspan="7" class="empty">Немає робіт для оцінювання</td></tr>`;
-
-  $("worksBody").querySelectorAll("[data-score]").forEach((b) => {
-    b.onclick = () => openScoreModal(b.dataset.score);
+  // Підключаємо обробники збереження балу
+  $("reviewList").querySelectorAll(".score-form").forEach((form) => {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const aid = form.dataset.app;
+      const score = form.querySelector(".score-input").value;
+      const comment = form.querySelector(".comment-input").value;
+      const { ok, data } = await send("POST", `/api/jury/applications/${aid}/score`, { score, comment });
+      if (!ok) return toast("err", data.error || "Помилка");
+      toast("ok", data.message);
+      loadApplicationsForReview();
+    });
   });
 }
-$("worksCompFilter").addEventListener("change", loadWorksTable);
 
-// ---- Модальне вікно оцінювання: Роботи → Оцінювання → Бали → Коментарі -------
-let currentAppId = null;
+function renderReviewCard(a) {
+  // Відповіді на поля форми (data_json: { "Назва поля": "значення" })
+  const entries = a.data_json && typeof a.data_json === "object" ? Object.entries(a.data_json) : [];
+  const answers = entries.length
+    ? `<div class="answers">${entries
+        .map(
+          ([label, val]) =>
+            `<div class="answer-row"><div class="a-label">${esc(label)}</div><div>${esc(val) || "—"}</div></div>`
+        )
+        .join("")}</div>`
+    : `<p class="hint">Учень не заповнював додаткових полів.</p>`;
 
-async function openScoreModal(appId) {
-  currentAppId = appId;
-  const { application, files, fields, myResult } = await getJSON(`/api/jury/applications/${appId}`);
-
-  $("scoreTitle").textContent = application.title || "Робота без назви";
-  $("scoreSubtitle").textContent = `${application.competition_title}${application.section_name ? " · " + application.section_name : ""}`;
-
-  // Деталі роботи: учасник, поля форми, файли
-  const data = application.data_json || {};
-  const fieldRows = Array.isArray(fields) && fields.length
-    ? fields
-        .map((f, i) => {
-          const key = f.name || `field_${i}`;
-          const label = esc(f.label || f.name || `Поле ${i + 1}`);
-          const val = esc(data[key] ?? "—");
-          return `<div class="kv"><span class="k">${label}</span><span class="v">${val || "—"}</span></div>`;
-        })
-        .join("")
+  // Файли
+  const files = (a.files || []).length
+    ? `<div class="answer-files">${a.files
+        .map(
+          (f) => `<a class="btn sm" href="${esc(f.file_url)}" target="_blank" rel="noopener">Файл</a>`
+        )
+        .join("")}</div>`
     : "";
 
-  const fileRows = files.length
-    ? `<div class="kv-files"><span class="k">Файли</span><div class="v">${files
-        .map((f) => `<a href="${esc(f.file_url)}" target="_blank" rel="noopener">${esc(f.file_type || "файл")}</a>`)
-        .join(" · ")}</div></div>`
-    : `<div class="kv"><span class="k">Файли</span><span class="v">—</span></div>`;
-
-  $("scoreBody").innerHTML = `
-    <div class="info-block">
-      <div class="kv"><span class="k">Учасник</span><span class="v">${esc(application.student_name || "—")}</span></div>
-      <div class="kv"><span class="k">Подано</span><span class="v">${fmtDate(application.created_at)}</span></div>
-      ${fieldRows}
-      ${fileRows}
-    </div>`;
-
-  // Заповнюємо поточну оцінку (якщо вже оцінено)
-  $("scoreValue").value = myResult?.score != null ? myResult.score : "";
-  $("scoreComment").value = myResult?.comment || "";
-
-  $("scoreModal").classList.remove("hidden");
-}
-
-function closeScoreModal() {
-  $("scoreModal").classList.add("hidden");
-  currentAppId = null;
-}
-$("scoreClose").onclick = closeScoreModal;
-$("scoreModal").addEventListener("click", (e) => {
-  if (e.target === $("scoreModal")) closeScoreModal();
-});
-
-$("scoreForm").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  if (!currentAppId) return;
-  const score = Number($("scoreValue").value);
-  if (!Number.isFinite(score) || score < 0 || score > 100) {
-    return toast("err", "Бал має бути від 0 до 100");
-  }
-  const { ok, data } = await send("POST", `/api/jury/applications/${currentAppId}/score`, {
-    score,
-    comment: $("scoreComment").value.trim(),
-  });
-  if (!ok) return toast("err", data.error || "Помилка");
-  toast("ok", data.message);
-  closeScoreModal();
-  loadWorksTable();
-});
-
-// ---- Рейтинг ----------------------------------------------------------------
-async function loadRating() {
-  await ensureCompetitions();
-  fillCompFilter("ratingCompFilter");
-  await loadRatingTable();
-}
-
-async function loadRatingTable() {
-  const compId = $("ratingCompFilter").value;
-  const url = compId ? `/api/jury/rating?competition_id=${compId}` : "/api/jury/rating";
-  const { rating } = await getJSON(url);
-  $("ratingBody").innerHTML = rating.length
-    ? rating
-        .map(
-          (r, i) => `<tr>
-            <td>${i + 1}</td>
-            <td>${esc(r.title || "Без назви")}</td>
-            <td>${esc(r.competition_title)}</td>
-            <td>${esc(r.section_name || "—")}</td>
-            <td>${esc(r.student_name || "—")}</td>
-            <td>${r.avg_score != null ? `<strong>${r.avg_score}</strong>` : "—"}</td>
-            <td>${r.judges_count}</td>
-          </tr>`
-        )
-        .join("")
-    : `<tr><td colspan="7" class="empty">Немає даних для рейтингу</td></tr>`;
-}
-$("ratingCompFilter").addEventListener("change", loadRatingTable);
-
-// ---- Коментарі --------------------------------------------------------------
-async function loadComments() {
-  const { comments } = await getJSON("/api/jury/comments");
-  $("commentsBody").innerHTML = comments.length
-    ? comments
-        .map(
-          (c) => `<tr>
-            <td>${esc(c.application_title || "Без назви")}</td>
-            <td>${esc(c.competition_title)}</td>
-            <td>${esc(c.student_name || "—")}</td>
-            <td><strong>${c.score != null ? c.score : "—"}</strong></td>
-            <td>${esc(c.comment || "—")}</td>
-            <td>${fmtDate(c.created_at)}</td>
-          </tr>`
-        )
-        .join("")
-    : `<tr><td colspan="6" class="empty">Ви ще не залишали коментарів</td></tr>`;
+  const scored = a.my_score != null;
+  return `<div class="review-card ${scored ? "scored" : ""}">
+    <div class="review-head">
+      <div>
+        <h3>${esc(a.title || "Без назви")}</h3>
+        <div class="review-meta">
+          <span class="chip">${esc(a.student_name || "Учасник")}</span>
+          ${a.section_name ? `<span class="chip">${esc(a.section_name)}</span>` : ""}
+          <span class="chip">${APP_STATUS[a.status] || a.status}</span>
+          <span class="chip">${fmtDate(a.created_at)}</span>
+        </div>
+      </div>
+      ${scored ? `<span class="status accepted">Ваш бал: ${a.my_score}</span>` : ""}
+    </div>
+    ${answers}
+    ${files}
+    <form class="score-form" data-app="${a.id}">
+      <label>Бал (0–100)
+        <input type="number" class="score-input" min="0" max="100" step="0.5" value="${a.my_score != null ? a.my_score : ""}" required />
+      </label>
+      <label class="comment-field">Коментар
+        <input type="text" class="comment-input" placeholder="Необов'язково" value="${esc(a.my_comment || "")}" />
+      </label>
+      <button class="btn">${scored ? "Оновити" : "Зберегти"}</button>
+    </form>
+  </div>`;
 }
 
 // ---- Профіль ----------------------------------------------------------------

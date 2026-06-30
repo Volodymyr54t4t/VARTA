@@ -1,0 +1,129 @@
+/* Панель журі VARTA — спільний дизайн із методистом + стилі оцінювання */
+@import url("./methodist.css");
+
+/* Випадаючий список у заголовку панелі */
+.inline-select {
+    max-width: 320px;
+    padding: 8px 10px;
+    border: 1px solid var(--border, #d8dbe3);
+    border-radius: 8px;
+    background: var(--surface, #fff);
+    color: inherit;
+    font: inherit;
+}
+
+/* Список заявок для оцінювання */
+.review-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.review-card {
+    border: 1px solid var(--border, #d8dbe3);
+    border-radius: 12px;
+    padding: 16px;
+    background: var(--surface, #fff);
+}
+
+.review-card.scored {
+    border-color: #2e7d32;
+    box-shadow: inset 3px 0 0 #2e7d32;
+}
+
+.review-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.review-head h3 {
+    margin: 0;
+    font-size: 16px;
+}
+
+.review-meta {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 4px;
+}
+
+.review-meta .chip {
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--chip-bg, #eef0f5);
+    color: var(--chip-fg, #444);
+}
+
+/* Відповіді на поля форми */
+.answers {
+    margin: 12px 0;
+    display: grid;
+    gap: 8px;
+}
+
+.answer-row {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 12px;
+    padding: 8px 0;
+    border-top: 1px dashed var(--border, #e3e6ee);
+}
+
+.answer-row .a-label {
+    font-weight: 600;
+    color: var(--muted, #555);
+}
+
+.answer-files {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+/* Форма виставлення балу */
+.score-form {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border, #e3e6ee);
+}
+
+.score-form label {
+    display: flex;
+    flex-direction: column;
+    font-size: 13px;
+    gap: 4px;
+}
+
+.score-form input[type="number"] {
+    width: 110px;
+}
+
+.score-form .comment-field {
+    flex: 1;
+    min-width: 220px;
+}
+
+.score-form input,
+.score-form textarea {
+    padding: 8px 10px;
+    border: 1px solid var(--border, #d8dbe3);
+    border-radius: 8px;
+    font: inherit;
+}
+
+@media (max-width: 640px) {
+    .answer-row {
+        grid-template-columns: 1fr;
+        gap: 2px;
+    }
+}

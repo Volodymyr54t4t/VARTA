@@ -5,8 +5,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>VARTA — Панель журі</title>
-    <!-- Спільні стилі панелі (ті самі, що й у методиста/завуча/вчителя/учня) -->
-    <link rel="stylesheet" href="./methodist.css" />
+    <link rel="stylesheet" href="./jury.css" />
 </head>
 
 <body>
@@ -22,10 +21,8 @@
             </div>
             <nav class="nav">
                 <button class="nav-item active" data-page="dashboard">Dashboard</button>
-                <button class="nav-item" data-page="competitions">Призначені конкурси</button>
-                <button class="nav-item" data-page="works">Роботи</button>
-                <button class="nav-item" data-page="rating">Рейтинг</button>
-                <button class="nav-item" data-page="comments">Коментарі</button>
+                <button class="nav-item" data-page="competitions">Мої конкурси</button>
+                <button class="nav-item" data-page="review">Оцінювання</button>
                 <button class="nav-item" data-page="profile">Профіль</button>
             </nav>
             <button id="logoutBtn" class="logout">Вийти</button>
@@ -36,7 +33,6 @@
             <header class="topbar">
                 <h1 id="pageTitle">Dashboard</h1>
                 <div class="who">
-                    <span id="assignedInfo">—</span>
                     <span id="userEmail"></span>
                     <span class="role-pill">Журі</span>
                 </div>
@@ -48,33 +44,29 @@
             <section class="page" data-page="dashboard">
                 <div class="cards" id="statCards"></div>
                 <div class="panel">
-                    <h2>Як проходить оцінювання</h2>
+                    <h2>Як це працює</h2>
                     <div class="flow">
-                        <div class="flow-step"><span class="flow-num">1</span>Роботи</div>
+                        <div class="flow-step"><span class="flow-num">1</span>Методист призначає вас до конкурсу</div>
                         <div class="flow-arrow">→</div>
-                        <div class="flow-step"><span class="flow-num">2</span>Оцінювання</div>
+                        <div class="flow-step"><span class="flow-num">2</span>Ви переглядаєте заявки</div>
                         <div class="flow-arrow">→</div>
-                        <div class="flow-step"><span class="flow-num">3</span>Бали (0–100)</div>
-                        <div class="flow-arrow">→</div>
-                        <div class="flow-step"><span class="flow-num">4</span>Коментарі</div>
+                        <div class="flow-step"><span class="flow-num">3</span>Виставляєте бали й коментарі</div>
                     </div>
                 </div>
             </section>
 
-            <!-- Призначені конкурси -->
+            <!-- Мої конкурси -->
             <section class="page hidden" data-page="competitions">
                 <div class="panel">
-                    <h2>Мої конкурси</h2>
-                    <p class="hint">Конкурси, до яких вас призначено суддею. Натисніть «Оцінити роботи», щоб перейти до
-                        робіт.</p>
+                    <h2>Конкурси, до яких вас призначено</h2>
+                    <p class="hint">Якщо тут порожньо — методист ще не призначив вас до жодного конкурсу.</p>
                     <table class="tbl">
                         <thead>
                             <tr>
                                 <th>Конкурс</th>
                                 <th>Період</th>
-                                <th>Роль</th>
-                                <th>Робіт</th>
-                                <th>Оцінено мною</th>
+                                <th>Заявок</th>
+                                <th>Оцінено</th>
                                 <th></th>
                             </tr>
                         </thead>
@@ -83,76 +75,15 @@
                 </div>
             </section>
 
-            <!-- Роботи -->
-            <section class="page hidden" data-page="works">
+            <!-- Оцінювання -->
+            <section class="page hidden" data-page="review">
                 <div class="panel">
-                    <h2>Роботи на оцінювання</h2>
-                    <div class="inline-form">
-                        <label>Конкурс
-                            <select id="worksCompFilter"></select>
-                        </label>
+                    <div class="panel-head">
+                        <h2>Оцінювання заявок</h2>
+                        <select id="reviewCompetition" class="inline-select"></select>
                     </div>
-                    <table class="tbl">
-                        <thead>
-                            <tr>
-                                <th>Робота</th>
-                                <th>Конкурс</th>
-                                <th>Секція</th>
-                                <th>Учасник</th>
-                                <th>Файлів</th>
-                                <th>Мій бал</th>
-                                <th></th>
-                            </tr>
-                        </thead>
-                        <tbody id="worksBody"></tbody>
-                    </table>
-                </div>
-            </section>
-
-            <!-- Рейтинг -->
-            <section class="page hidden" data-page="rating">
-                <div class="panel">
-                    <h2>Рейтинг робіт</h2>
-                    <p class="hint">Середній бал по всіх суддях. Сортування — від найвищого балу.</p>
-                    <div class="inline-form">
-                        <label>Конкурс
-                            <select id="ratingCompFilter"></select>
-                        </label>
-                    </div>
-                    <table class="tbl">
-                        <thead>
-                            <tr>
-                                <th>#</th>
-                                <th>Робота</th>
-                                <th>Конкурс</th>
-                                <th>Секція</th>
-                                <th>Учасник</th>
-                                <th>Середній бал</th>
-                                <th>Суддів</th>
-                            </tr>
-                        </thead>
-                        <tbody id="ratingBody"></tbody>
-                    </table>
-                </div>
-            </section>
-
-            <!-- Коментарі -->
-            <section class="page hidden" data-page="comments">
-                <div class="panel">
-                    <h2>Мої коментарі</h2>
-                    <table class="tbl">
-                        <thead>
-                            <tr>
-                                <th>Робота</th>
-                                <th>Конкурс</th>
-                                <th>Учасник</th>
-                                <th>Бал</th>
-                                <th>Коментар</th>
-                                <th>Дата</th>
-                            </tr>
-                        </thead>
-                        <tbody id="commentsBody"></tbody>
-                    </table>
+                    <p class="hint">Оберіть конкурс, перегляньте відповіді учнів та виставте бал (0–100).</p>
+                    <div id="reviewList" class="review-list"></div>
                 </div>
             </section>
 
@@ -175,31 +106,6 @@
                 </div>
             </section>
         </main>
-    </div>
-
-    <!-- Модальне вікно оцінювання роботи -->
-    <div id="scoreModal" class="modal-overlay hidden">
-        <div class="modal">
-            <div class="modal-head">
-                <div>
-                    <h2 id="scoreTitle">Оцінювання роботи</h2>
-                    <span id="scoreSubtitle" class="hint"></span>
-                </div>
-                <button type="button" class="icon-btn" id="scoreClose" aria-label="Закрити">✕</button>
-            </div>
-            <div class="modal-body">
-                <div id="scoreBody"></div>
-                <form id="scoreForm" class="stack-form">
-                    <label>Бал (0–100)
-                        <input type="number" id="scoreValue" min="0" max="100" step="0.5" required />
-                    </label>
-                    <label>Коментар
-                        <textarea id="scoreComment" rows="4" placeholder="Відгук про роботу (необов'язково)"></textarea>
-                    </label>
-                    <button class="btn ok">Зберегти оцінку</button>
-                </form>
-            </div>
-        </div>
     </div>
 
     <script src="./jury.js"></script>
